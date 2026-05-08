@@ -1,8 +1,17 @@
-"""MCPK 文件读取工具。"""
+"""MCPK v1/v2 文件读取工具。
+
+支持：
+- 自动检测 v1/v2 版本
+- Magic Index / Group Index 解析（v2）
+- VIDEO 条目类型
+- 完整时间戳（created_at / modified_at）
+- 可选 XOR 流解密
+"""
 
 from __future__ import annotations
 
 import binascii
+import hashlib
 import json
 import struct
 import zlib
@@ -11,45 +20,65 @@ from typing import Optional, Union
 
 from .constants import (
     MAGIC, VERSION, HEADER_SIZE, FOOTER_SIZE,
-    HEADER_FMT, FOOTER_FMT, TOC_ENTRY_FIXED_FMT,
-    EntryType, Compression,
+    MAGIC_INDEX_MAGIC, GROUP_INDEX_MAGIC, ENCRYPTION_PARAMS_MAGIC,
+    NO_GROUP, ENCRYPTION_PARAMS_SIZE, FLAG_ENCRYPTED,
+    HEADER_FMT, FOOTER_FMT, TOC_ENTRY_FIXED_FMT, TOC_ENTRY_FIXED_SIZE,
+    MAGIC_INDEX_HEADER_FMT, MAGIC_INDEX_HEADER_SIZE,
+    MAGIC_ENTRY_FMT, MAGIC_ENTRY_SIZE,
+    GROUP_INDEX_HEADER_FMT, GROUP_INDEX_HEADER_SIZE,
+    ENCRYPTION_PARAMS_FMT,
+    EntryType, Compression, GroupType, RelationType,
+    EncryptionMode, KdfType,
 )
-from .types import FileHeader, TocEntry
+from .types import (
+    FileHeader, TocEntry, MagicEntry, GroupEntry, GroupRelation, EncryptionParams,
+)
+from .writer import xor_bytes, _derive_key, _derive_control_key, _derive_blob_key
 
 
 class MCPKError(Exception):
-    """MCPK 格式相关错误。"""
     pass
 
 
 class MCPKReader:
     """
-    MCPK 文件读取器。
+    MCPK v1/v2 文件读取器。
 
     用法:
-        with MCPKReader("archive.mcpk") as reader:
-            # 列出所有条目
-            for entry in reader.entries:
-                print(entry)
+        # 不加密文件
+        with MCPKReader("archive.mcpk") as r:
+            for entry in r.entries:
+                print(entry.name, entry.modified_at)
+            data = r.extract("report.pdf")
 
-            # 提取单个文件
-            data = reader.extract("report.pdf")
-            reader.extract_to("photo.jpg", "./output/")
-
-            # 提取全部
-            reader.extract_all("./output/")
+        # 加密文件
+        with MCPKReader("secret.mcpk", password="mypass") as r:
+            data = r.extract("private.md")
     """
 
-    def __init__(self, file_path: Union[str, Path]):
+    def __init__(self, file_path: Union[str, Path], *, password: Optional[str] = None):
         self.file_path = Path(file_path)
         self._file = None
+        self._password = password
         self._header: Optional[FileHeader] = None
+        self._enc_params: Optional[EncryptionParams] = None
         self._entries: list[TocEntry] = []
+        self._magic_entries: list[MagicEntry] = []
+        self._groups: list[GroupEntry] = []
+        self._relations: list[GroupRelation] = []
         self._loaded = False
+        self._version: int = 1
+        self._control_key: Optional[bytes] = None
+        self._master_key: Optional[bytes] = None
+        self._is_encrypted: bool = False
 
     def __enter__(self):
         self._file = open(self.file_path, "rb")
-        self._load()
+        try:
+            self._load()
+        except Exception:
+            self._file.close()
+            raise
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -59,244 +88,193 @@ class MCPKReader:
     # ── 属性 ──────────────────────────────────────────────
 
     @property
+    def version(self) -> int:
+        self._ensure_loaded()
+        return self._version
+
+    @property
     def header(self) -> FileHeader:
-        """文件头信息。"""
         self._ensure_loaded()
         return self._header
 
     @property
+    def is_encrypted(self) -> bool:
+        self._ensure_loaded()
+        return self._is_encrypted
+
+    @property
+    def encryption_params(self) -> Optional[EncryptionParams]:
+        self._ensure_loaded()
+        return self._enc_params
+
+    @property
     def entries(self) -> list[TocEntry]:
-        """所有 TOC 条目。"""
         self._ensure_loaded()
         return list(self._entries)
 
     @property
     def entry_count(self) -> int:
-        """条目总数。"""
         return len(self._entries)
+
+    @property
+    def magic_entries(self) -> list[MagicEntry]:
+        self._ensure_loaded()
+        return list(self._magic_entries)
+
+    @property
+    def groups(self) -> list[GroupEntry]:
+        self._ensure_loaded()
+        return list(self._groups)
+
+    @property
+    def relations(self) -> list[GroupRelation]:
+        self._ensure_loaded()
+        return list(self._relations)
 
     # ── 公开 API ──────────────────────────────────────────
 
     def list_entries(self, entry_type: Optional[int] = None) -> list[TocEntry]:
-        """
-        列出条目，可按类型过滤。
-
-        Args:
-            entry_type: 过滤的条目类型 (EntryType 枚举值)
-
-        Returns:
-            过滤后的 TocEntry 列表
-        """
         if entry_type is None:
             return self.entries
         return [e for e in self._entries if e.entry_type == entry_type]
 
     def find(self, name: str) -> Optional[TocEntry]:
-        """
-        按文件名查找条目。
-
-        Args:
-            name: 文件名
-
-        Returns:
-            匹配的 TocEntry，未找到返回 None
-        """
         for entry in self._entries:
             if entry.name == name:
                 return entry
         return None
 
+    def find_group(self, name: str) -> Optional[GroupEntry]:
+        for group in self._groups:
+            if group.name == name:
+                return group
+        return None
+
+    def list_group_entries(self, group_name: str) -> list[TocEntry]:
+        group = self.find_group(group_name)
+        if group is None:
+            raise KeyError(f"分组不存在: {group_name}")
+        return [self._entries[eid] for eid in group.entry_ids if eid < len(self._entries)]
+
     def extract(self, name: str) -> bytes:
-        """
-        提取指定文件的原始数据（解压后）。
-
-        Args:
-            name: 文件名
-
-        Returns:
-            原始文件字节数据
-
-        Raises:
-            KeyError: 文件名不存在
-        """
         entry = self.find(name)
         if entry is None:
             raise KeyError(f"文件不存在: {name}")
         return self.extract_entry(entry)
 
     def extract_entry(self, entry: TocEntry) -> bytes:
-        """
-        提取指定条目的原始数据。
-
-        Args:
-            entry: TocEntry 对象
-
-        Returns:
-            原始文件字节数据
-
-        Raises:
-            MCPKError: 数据损坏
-        """
-        # 定位并读取 blob
         self._file.seek(entry.blob_offset)
-        stored_data = self._file.read(entry.stored_size)
 
-        if len(stored_data) != entry.stored_size:
-            raise MCPKError(
-                f"读取数据不完整: {entry.name} "
-                f"(期望 {entry.stored_size}, 实际 {len(stored_data)})"
-            )
+        if self._is_encrypted and self._enc_params.encrypt_mode in (
+            EncryptionMode.FULL, EncryptionMode.DATA_ONLY
+        ):
+            # stored_size = salt(16B) + 加密数据
+            entry_salt = self._file.read(16)
+            encrypted_data = self._file.read(entry.stored_size - 16)
+            entry_id = self._entries.index(entry)
+            blob_key = _derive_blob_key(self._master_key, entry_id, entry_salt)
+            stored_data = xor_bytes(encrypted_data, blob_key)
+        else:
+            stored_data = self._file.read(entry.stored_size)
 
-        # 解压
+        # 校验：解压后的大小应匹配 original_size
+        # stored_data 的长度在加密时 = stored_size - 16（原始压缩大小）
+        # 在非加密时 = stored_size（原始压缩大小）
+
         original_data = self._decompress(stored_data, entry.compression)
 
-        # 校验大小
         if len(original_data) != entry.original_size:
             raise MCPKError(
                 f"数据大小不匹配: {entry.name} "
                 f"(期望 {entry.original_size}, 实际 {len(original_data)})"
             )
 
-        # 校验 CRC32
         crc32_val = binascii.crc32(original_data) & 0xFFFFFFFF
         if crc32_val != entry.crc32:
             raise MCPKError(
                 f"CRC32 校验失败: {entry.name} "
                 f"(期望 0x{entry.crc32:08x}, 实际 0x{crc32_val:08x})"
             )
-
         return original_data
 
-    def extract_to(
-        self,
-        name: str,
-        output_dir: Union[str, Path],
-        *,
-        preserve_structure: bool = True,
-    ) -> Path:
-        """
-        提取指定文件到目录。
-
-        Args:
-            name: 文件名
-            output_dir: 输出目录
-            preserve_structure: 是否保留包内目录结构
-
-        Returns:
-            输出文件的 Path
-        """
+    def extract_to(self, name: str, output_dir: Union[str, Path], *,
+                   preserve_structure: bool = True) -> Path:
         data = self.extract(name)
         output_dir = Path(output_dir)
-
-        if preserve_structure:
-            out_path = output_dir / name
-        else:
-            out_path = output_dir / Path(name).name
-
+        out_path = output_dir / name if preserve_structure else output_dir / Path(name).name
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(data)
         return out_path
 
-    def extract_all(
-        self,
-        output_dir: Union[str, Path],
-        *,
-        preserve_structure: bool = True,
-    ) -> list[Path]:
-        """
-        提取全部文件。
-
-        Args:
-            output_dir: 输出目录
-            preserve_structure: 是否保留包内目录结构
-
-        Returns:
-            输出文件路径列表
-        """
+    def extract_all(self, output_dir: Union[str, Path], *,
+                    preserve_structure: bool = True) -> list[Path]:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        return [
+            self.extract_to(e.name, output_dir, preserve_structure=preserve_structure)
+            for e in self._entries
+        ]
 
-        paths = []
-        for entry in self._entries:
-            p = self.extract_to(entry.name, output_dir, preserve_structure=preserve_structure)
-            paths.append(p)
-        return paths
+    def extract_group(self, group_name: str, output_dir: Union[str, Path], *,
+                      preserve_structure: bool = True) -> list[Path]:
+        entries = self.list_group_entries(group_name)
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return [
+            self.extract_to(e.name, output_dir, preserve_structure=preserve_structure)
+            for e in entries
+        ]
 
     def get_metadata(self, name: str) -> dict:
-        """
-        获取指定文件的元数据。
-
-        Args:
-            name: 文件名
-
-        Returns:
-            元数据 dict
-
-        Raises:
-            KeyError: 文件名不存在
-        """
         entry = self.find(name)
         if entry is None:
             raise KeyError(f"文件不存在: {name}")
         return entry.metadata_dict()
 
     def verify(self) -> list[str]:
-        """
-        验证整个文件的完整性。
-
-        Returns:
-            错误消息列表（空列表表示完全通过）
-        """
         errors = []
-
-        # 验证 Header
         if self._header.magic != MAGIC:
             errors.append(f"Header magic 不匹配: {self._header.magic!r}")
-
         if self._header.version > VERSION:
-            errors.append(
-                f"版本过高: {self._header.version} (当前工具支持 {VERSION})"
-            )
+            errors.append(f"版本过高: {self._header.version} (当前工具支持 {VERSION})")
 
-        # 验证 Footer
         try:
             self._file.seek(-FOOTER_SIZE, 2)
             footer_data = self._file.read(FOOTER_SIZE)
-            footer_magic, footer_toc_offset, footer_crc = struct.unpack(
-                FOOTER_FMT, footer_data
-            )
+            footer_magic, footer_toc_offset, footer_crc = struct.unpack(FOOTER_FMT, footer_data)
             if footer_magic != MAGIC:
                 errors.append(f"Footer magic 不匹配: {footer_magic!r}")
             computed_crc = binascii.crc32(footer_data[:12]) & 0xFFFFFFFF
             if computed_crc != footer_crc:
-                errors.append(
-                    f"Footer CRC 不匹配 (期望 0x{footer_crc:08x}, "
-                    f"实际 0x{computed_crc:08x})"
-                )
+                errors.append(f"Footer CRC 不匹配")
         except Exception as e:
             errors.append(f"Footer 读取失败: {e}")
 
-        # 验证每个条目
+        if self._version >= 2 and self._header.magic_index_size > 0:
+            try:
+                self._file.seek(self._header.magic_index_offset)
+                mi_data = self._file.read(self._header.magic_index_size)
+                if self._is_encrypted and self._enc_params.encrypt_mode in (
+                    EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
+                ):
+                    mi_data = xor_bytes(mi_data, self._control_key)
+                if mi_data[:4] != MAGIC_INDEX_MAGIC:
+                    errors.append("Magic Index magic 不匹配")
+            except Exception as e:
+                errors.append(f"Magic Index 读取失败: {e}")
+
         for i, entry in enumerate(self._entries):
             try:
-                data = self.extract_entry(entry)
+                self.extract_entry(entry)
             except MCPKError as e:
                 errors.append(f"条目 [{i}] {entry.name}: {e}")
-
         return errors
 
     def inspect(self) -> dict:
-        """
-        返回文件的详细检查信息。
-
-        Returns:
-            包含 header、entries、统计信息的 dict
-        """
         h = self._header
         entries_info = []
         total_original = 0
         total_stored = 0
-
         for e in self._entries:
             total_original += e.original_size
             total_stored += e.stored_size
@@ -309,134 +287,322 @@ class MCPKReader:
                 "stored_size": e.stored_size,
                 "ratio": f"{e.compression_ratio:.2f}x" if e.stored_size > 0 else "N/A",
                 "crc32": f"0x{e.crc32:08x}",
+                "group_id": e.group_id,
+                "created_at": e.created_at,
+                "modified_at": e.modified_at,
+                "created_iso": e.time_info()["created"],
+                "modified_iso": e.time_info()["modified"],
                 "metadata": e.metadata_dict(),
             })
 
-        return {
+        result = {
             "file": str(self.file_path),
             "file_size": self.file_path.stat().st_size,
             "version": h.version,
             "flags": h.flags,
-            "created_at": h.created_at,
+            "encrypted": self._is_encrypted,
+            "packed_at": h.packed_at,
+            "packed_at_iso": h.packed_at_iso(),
             "entry_count": h.entry_count,
             "toc_offset": h.toc_offset,
-            "toc_size": h.toc_size,
-            "data_section_size": h.data_section_size,
             "total_original_size": total_original,
             "total_stored_size": total_stored,
             "overall_ratio": f"{total_original / total_stored:.2f}x" if total_stored > 0 else "N/A",
             "entries": entries_info,
         }
 
+        if self._is_encrypted and self._enc_params:
+            result["encrypt_mode"] = EncryptionMode(self._enc_params.encrypt_mode).name
+
+        if self._version >= 2:
+            result["magic_index_offset"] = h.magic_index_offset
+            result["magic_index_size"] = h.magic_index_size
+            result["group_count"] = h.group_count
+            result["group_index_offset"] = h.group_index_offset
+            result["group_index_size"] = h.group_index_size
+            result["groups"] = [
+                {
+                    "group_id": g.group_id, "name": g.name,
+                    "type": GroupType(g.group_type).name if g.group_type in GroupType._value2member_map_ else f"0x{g.group_type:02x}",
+                    "entry_count": len(g.entry_ids), "entry_ids": g.entry_ids,
+                    "metadata": g.metadata_dict(),
+                }
+                for g in self._groups
+            ]
+            result["relations"] = [
+                {
+                    "source": r.source_group, "target": r.target_group,
+                    "type": RelationType(r.relation_type).name if r.relation_type in RelationType._value2member_map_ else f"0x{r.relation_type:02x}",
+                    "description": r.description,
+                }
+                for r in self._relations
+            ]
+        return result
+
     # ── 内部方法 ──────────────────────────────────────────
 
     def _ensure_loaded(self):
-        """确保文件已加载。"""
         if not self._loaded:
             raise MCPKError("文件未打开，请使用 with 语句")
 
     def _load(self):
-        """加载并解析文件。"""
         file_size = self.file_path.stat().st_size
-
         if file_size < HEADER_SIZE + FOOTER_SIZE:
             raise MCPKError("文件太小，不是有效的 MCPK 文件")
 
-        # 读取 Header
         self._file.seek(0)
         header_data = self._file.read(HEADER_SIZE)
-        (magic, version, flags, created_at,
-         toc_offset, toc_size, entry_count,
-         data_section_size, _reserved) = struct.unpack(HEADER_FMT, header_data)
+        if header_data[:4] != MAGIC:
+            raise MCPKError(f"不是有效的 MCPK 文件 (magic: {header_data[:4]!r})")
 
-        if magic != MAGIC:
-            raise MCPKError(f"不是有效的 MCPK 文件 (magic: {magic!r})")
+        version = struct.unpack_from("<H", header_data, 4)[0]
+        self._version = version
 
-        if version > VERSION:
-            raise MCPKError(
-                f"不支持的版本 {version}，当前工具最高支持 v{VERSION}"
-            )
-
-        self._header = FileHeader(
-            magic=magic,
-            version=version,
-            flags=flags,
-            created_at=created_at,
-            toc_offset=toc_offset,
-            toc_size=toc_size,
-            entry_count=entry_count,
-            data_section_size=data_section_size,
-        )
-
-        # 读取 TOC
-        self._file.seek(toc_offset)
-        toc_data = self._file.read(toc_size)
-        self._entries = self._parse_toc(toc_data, entry_count)
+        if version == 1:
+            self._load_v1(header_data)
+        elif version == 2:
+            self._load_v2(header_data)
+        else:
+            raise MCPKError(f"不支持的版本 {version}")
         self._loaded = True
 
-    def _parse_toc(self, toc_data: bytes, expected_count: int) -> list[TocEntry]:
-        """解析 TOC 数据为 TocEntry 列表。"""
+    def _load_v1(self, header_data: bytes):
+        v1_fmt = "<4sHH Q Q Q I I 24s"
+        (magic, version, flags, created_at,
+         toc_offset, toc_size, entry_count,
+         data_section_size, _reserved) = struct.unpack(v1_fmt, header_data)
+
+        self._header = FileHeader(
+            magic=magic, version=version, flags=flags,
+            packed_at=created_at,
+            magic_index_offset=0, magic_index_size=0,
+            entry_count=entry_count, group_count=0,
+            group_index_offset=0, group_index_size=0,
+            ep_offset=0, toc_offset=toc_offset,
+        )
+        self._file.seek(toc_offset)
+        toc_data = self._file.read(toc_size)
+        self._entries = self._parse_toc(toc_data, entry_count, version=1)
+
+    def _load_v2(self, header_data: bytes):
+        (magic, version, flags, packed_at,
+         ep_offset, ep_size,
+         entry_count, group_count,
+         group_index_offset, group_index_size,
+         toc_offset) = struct.unpack(HEADER_FMT, header_data)
+
+        # Magic Index 紧接 Header(或 ep) 之后
+        magic_index_offset = HEADER_SIZE + ep_size
+        magic_index_size = group_index_offset - magic_index_offset if group_index_offset > magic_index_offset else 0
+
+        self._header = FileHeader(
+            magic=magic, version=version, flags=flags,
+            packed_at=packed_at,
+            magic_index_offset=magic_index_offset,
+            magic_index_size=magic_index_size,
+            entry_count=entry_count, group_count=group_count,
+            group_index_offset=group_index_offset,
+            group_index_size=group_index_size,
+            ep_offset=ep_offset, ep_size=ep_size,
+            toc_offset=toc_offset,
+        )
+        self._is_encrypted = bool(flags & FLAG_ENCRYPTED)
+
+        # ── 加密处理 ──
+        if self._is_encrypted:
+            if ep_offset == 0:
+                raise MCPKError("文件标记为加密但缺少 Encryption Params")
+            self._file.seek(ep_offset)
+            ep_data = self._file.read(ENCRYPTION_PARAMS_SIZE)
+            if len(ep_data) < ENCRYPTION_PARAMS_SIZE:
+                raise MCPKError("Encryption Params 数据不完整")
+            self._enc_params = self._parse_encryption_params(ep_data)
+
+            if self._password is None:
+                raise MCPKError("此文件已加密，请提供密码（password 参数）")
+
+            # 派生密钥并验证
+            self._master_key = _derive_key(self._password, self._enc_params.salt)
+            self._control_key = _derive_control_key(self._master_key)
+            computed_hash = hashlib.sha256(self._control_key).digest()
+            if computed_hash != self._enc_params.control_key_hash:
+                raise MCPKError("密码错误或文件已损坏")
+
+        # ── 读取 Magic Index ──
+        if magic_index_size > 0:
+            self._file.seek(magic_index_offset)
+            mi_data = self._file.read(magic_index_size)
+            if self._is_encrypted and self._enc_params.encrypt_mode in (
+                EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
+            ):
+                mi_data = xor_bytes(mi_data, self._control_key)
+            self._magic_entries = self._parse_magic_index(mi_data)
+
+        # ── 读取 Group Index ──
+        if group_index_size > 0:
+            self._file.seek(group_index_offset)
+            gi_data = self._file.read(group_index_size)
+            if self._is_encrypted and self._enc_params.encrypt_mode in (
+                EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
+            ):
+                gi_data = xor_bytes(gi_data, self._control_key)
+            self._groups, self._relations = self._parse_group_index(gi_data)
+
+        # ── 读取 TOC ──
+        footer_offset = self.file_path.stat().st_size - FOOTER_SIZE
+        toc_size = footer_offset - toc_offset
+        self._file.seek(toc_offset)
+        toc_data = self._file.read(toc_size)
+        if self._is_encrypted and self._enc_params.encrypt_mode in (
+            EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
+        ):
+            toc_data = xor_bytes(toc_data, self._control_key)
+        self._entries = self._parse_toc(toc_data, entry_count, version=2)
+
+        # 注意：加密数据区每条目前有 16 字节 salt 前缀
+        # blob_offset 已指向正确位置（包含 salt），stored_size 保持原始大小
+        # extract_entry() 会先读 16 字节 salt 再读 stored_size 字节加密数据
+
+    def _parse_encryption_params(self, data: bytes) -> EncryptionParams:
+        (params_magic, kdf_type, encrypt_mode,
+         _reserved, salt, control_key_hash) = struct.unpack_from(
+            ENCRYPTION_PARAMS_FMT, data, 0
+        )
+        if params_magic != ENCRYPTION_PARAMS_MAGIC:
+            raise MCPKError(f"Encryption Params magic 不匹配: {params_magic!r}")
+        return EncryptionParams(
+            kdf_type=kdf_type, encrypt_mode=encrypt_mode,
+            salt=salt, control_key_hash=control_key_hash,
+        )
+
+    def _parse_magic_index(self, data: bytes) -> list[MagicEntry]:
+        entries = []
+        if len(data) < MAGIC_INDEX_HEADER_SIZE:
+            raise MCPKError("Magic Index 数据不完整")
+        mi_magic, entry_count, index_size = struct.unpack_from(
+            MAGIC_INDEX_HEADER_FMT, data, 0
+        )
+        if mi_magic != MAGIC_INDEX_MAGIC:
+            raise MCPKError(f"Magic Index magic 不匹配: {mi_magic!r}")
+        offset = MAGIC_INDEX_HEADER_SIZE
+        for i in range(entry_count):
+            if offset + MAGIC_ENTRY_SIZE > len(data):
+                raise MCPKError(f"Magic Entry 数据越界 (条目 {i})")
+            (entry_id, entry_type, group_id, magic_len,
+             magic_bytes, name_len, _reserved) = struct.unpack_from(
+                MAGIC_ENTRY_FMT, data, offset
+            )
+            offset += MAGIC_ENTRY_SIZE
+            entries.append(MagicEntry(
+                entry_id=entry_id, entry_type=entry_type,
+                group_id=group_id, magic_bytes=magic_bytes[:magic_len] if magic_len > 0 else b"",
+            ))
+        return entries
+
+    def _parse_group_index(self, data: bytes) -> tuple[list[GroupEntry], list[GroupRelation]]:
+        groups, relations = [], []
+        if len(data) < GROUP_INDEX_HEADER_SIZE:
+            raise MCPKError("Group Index 数据不完整")
+        gi_magic, group_count, relation_count, index_size = struct.unpack_from(
+            GROUP_INDEX_HEADER_FMT, data, 0
+        )
+        if gi_magic != GROUP_INDEX_MAGIC:
+            raise MCPKError(f"Group Index magic 不匹配: {gi_magic!r}")
+        offset = GROUP_INDEX_HEADER_SIZE
+        for i in range(group_count):
+            if offset + 6 > len(data):
+                raise MCPKError(f"Group Entry 数据越界 (分组 {i})")
+            group_id, entry_count, group_type, name_len = struct.unpack_from(
+                "<BBH H", data, offset
+            )
+            offset += 6
+            name = data[offset:offset + name_len].decode("utf-8")
+            offset += name_len
+            meta_len = struct.unpack_from("<H", data, offset)[0]
+            offset += 2
+            metadata = None
+            if meta_len > 0:
+                metadata = data[offset:offset + meta_len].decode("utf-8")
+                offset += meta_len
+            eid_count = struct.unpack_from("<H", data, offset)[0]
+            offset += 2
+            entry_ids = []
+            for _ in range(eid_count):
+                entry_ids.append(struct.unpack_from("<I", data, offset)[0])
+                offset += 4
+            groups.append(GroupEntry(
+                group_id=group_id, entry_ids=entry_ids,
+                group_type=group_type, name=name, metadata=metadata,
+            ))
+        for i in range(relation_count):
+            if offset + 6 > len(data):
+                raise MCPKError(f"Relation 数据越界 (关系 {i})")
+            src, tgt, rtype, dlen = struct.unpack_from("<BBH H", data, offset)
+            offset += 6
+            desc = ""
+            if dlen > 0:
+                desc = data[offset:offset + dlen].decode("utf-8")
+                offset += dlen
+            relations.append(GroupRelation(
+                source_group=src, target_group=tgt,
+                relation_type=rtype, description=desc,
+            ))
+        return groups, relations
+
+    def _parse_toc(self, toc_data: bytes, expected_count: int, version: int = 2) -> list[TocEntry]:
         entries = []
         offset = 0
+        # v1 TOC 固定部分 42 字节，v2 为 50 字节
+        fixed_size = TOC_ENTRY_FIXED_SIZE if version >= 2 else 42
 
         for i in range(expected_count):
-            if offset + 40 > len(toc_data):
+            if offset + fixed_size > len(toc_data):
                 raise MCPKError(f"TOC 数据不完整 (条目 {i}/{expected_count})")
 
-            # 读取固定部分
-            (entry_type, compression, _reserved, crc32,
-             created_at, original_size, stored_size,
-             blob_offset, name_len) = struct.unpack_from(
-                TOC_ENTRY_FIXED_FMT, toc_data, offset
-            )
-            offset += struct.calcsize(TOC_ENTRY_FIXED_FMT)
+            if version >= 2:
+                (entry_type, compression, reserved, crc32,
+                 created_at, modified_at,
+                 original_size, stored_size,
+                 blob_offset, name_len) = struct.unpack_from(
+                    TOC_ENTRY_FIXED_FMT, toc_data, offset
+                )
+            else:
+                # v1: 无 modified_at 字段 (42 字节)
+                (entry_type, compression, reserved, crc32,
+                 created_at, original_size, stored_size,
+                 blob_offset, name_len) = struct.unpack_from(
+                    "<BB2sI Q Q Q Q H", toc_data, offset
+                )
+                modified_at = 0
 
-            # 读取 name
-            if offset + name_len > len(toc_data):
-                raise MCPKError(f"TOC name 数据越界 (条目 {i})")
+            offset += fixed_size
+            group_id = reserved[0] if (version >= 2 and len(reserved) >= 1) else NO_GROUP
+
             name = toc_data[offset:offset + name_len].decode("utf-8")
             offset += name_len
 
-            # 读取 mime_len + mime
-            if offset + 2 > len(toc_data):
-                raise MCPKError(f"TOC mime_len 数据越界 (条目 {i})")
             mime_len = struct.unpack_from("<H", toc_data, offset)[0]
             offset += 2
-            if offset + mime_len > len(toc_data):
-                raise MCPKError(f"TOC mime 数据越界 (条目 {i})")
             mime_type = toc_data[offset:offset + mime_len].decode("utf-8")
             offset += mime_len
 
-            # 读取 meta_len + metadata
-            if offset + 2 > len(toc_data):
-                raise MCPKError(f"TOC meta_len 数据越界 (条目 {i})")
             meta_len = struct.unpack_from("<H", toc_data, offset)[0]
             offset += 2
             metadata = None
             if meta_len > 0:
-                if offset + meta_len > len(toc_data):
-                    raise MCPKError(f"TOC metadata 数据越界 (条目 {i})")
                 metadata = toc_data[offset:offset + meta_len].decode("utf-8")
                 offset += meta_len
 
-            entry = TocEntry(
-                entry_type=entry_type,
-                compression=compression,
-                crc32=crc32,
-                created_at=created_at,
-                original_size=original_size,
-                stored_size=stored_size,
-                blob_offset=blob_offset,
-                name=name,
-                mime_type=mime_type,
-                metadata=metadata,
-            )
-            entries.append(entry)
-
+            entries.append(TocEntry(
+                entry_type=entry_type, compression=compression,
+                crc32=crc32, created_at=created_at, modified_at=modified_at,
+                original_size=original_size, stored_size=stored_size,
+                blob_offset=blob_offset, name=name, mime_type=mime_type,
+                metadata=metadata, group_id=group_id,
+            ))
         return entries
 
     def _decompress(self, data: bytes, compression: int) -> bytes:
-        """按指定算法解压数据。"""
         if compression == Compression.NONE:
             return data
         elif compression == Compression.ZLIB:
