@@ -3075,6 +3075,256 @@ def test_48_json_index_complex(sizes: dict):
     return True
 
 
+def test_49_same_name_different_ext(sizes: dict):
+    """同名不同扩展名：1.txt, 1.py, 1.png 是否导致冲突。"""
+    label = "同名不同扩展名"
+    print("\n" + "=" * 60)
+    print(f"测试 49: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        # ── 创建同名不同扩展名的文件 ──
+        txt_content = "这是文本文件内容\n" * 20
+        py_content = "#!/usr/bin/env python3\nprint('hello world')\n" * 10
+        png_size = sizes["image"]
+
+        txt_path = base / "1.txt"
+        py_path = base / "1.py"
+        png_path = base / "1.png"
+
+        txt_path.write_text(txt_content, encoding="utf-8")
+        py_path.write_text(py_content, encoding="utf-8")
+        gen_png_file(png_path, png_size, seed=99)
+
+        originals = {
+            "1.txt": txt_path.read_bytes(),
+            "1.py": py_path.read_bytes(),
+            "1.png": png_path.read_bytes(),
+        }
+
+        # ── 打包 ──
+        mcpk_path = base / "samename.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            for name, path in [("1.txt", txt_path), ("1.py", py_path), ("1.png", png_path)]:
+                writer.add_file(path, metadata={"title": f"测试-{name}"})
+
+        print(f"  打包: 3 同名文件 ✓")
+
+        # ── 读取验证 ──
+        with MCPKReader(mcpk_path) as reader:
+            assert reader.entry_count == 3, \
+                f"条目数应为 3, 实际 {reader.entry_count}"
+            print(f"  条目数: 3 ✓")
+
+            # 文件名应全部存在
+            names = sorted(e.name for e in reader.entries)
+            assert names == ["1.png", "1.py", "1.txt"], \
+                f"文件名不匹配: {names}"
+            print(f"  文件名: {names} ✓")
+
+            # MIME 类型正确
+            mime_map = {e.name: e.mime_type for e in reader.entries}
+            assert mime_map["1.txt"] == "text/plain", \
+                f"1.txt MIME: {mime_map['1.txt']}"
+            assert mime_map["1.py"] == "text/x-python", \
+                f"1.py MIME: {mime_map['1.py']}"
+            assert mime_map["1.png"] == "image/png", \
+                f"1.png MIME: {mime_map['1.png']}"
+            print(f"  MIME 类型正确 ✓")
+
+            # EntryType 正确
+            type_map = {e.name: e.entry_type for e in reader.entries}
+            assert type_map["1.txt"] == EntryType.DOCUMENT
+            assert type_map["1.py"] == EntryType.DOCUMENT
+            assert type_map["1.png"] == EntryType.IMAGE
+            print(f"  EntryType 正确 ✓")
+
+            # 内容提取一致
+            for name, original_data in originals.items():
+                extracted = reader.extract(name)
+                assert extracted == original_data, \
+                    f"{name} 内容不一致 (提取 {len(extracted)} vs 原始 {len(original_data)})"
+            print(f"  全部 3 文件内容一致 ✓")
+
+            # 校验
+            errors = reader.verify()
+            assert not errors, f"校验失败: {errors}"
+            print(f"  完整性校验通过 ✓")
+
+            # 提取到目录
+            extract_dir = base / "extracted"
+            reader.extract_all(extract_dir)
+            for name, original_data in originals.items():
+                out = extract_dir / name
+                assert out.exists(), f"缺失: {name}"
+                assert out.read_bytes() == original_data, f"内容不一致: {name}"
+            print(f"  提取到目录验证通过 ✓")
+
+            # inspect JSON 可序列化
+            info = reader.inspect()
+            json_str = json.dumps(info, ensure_ascii=False)
+            assert len(json_str) > 50
+            print(f"  inspect JSON 正常 ✓")
+
+    # ── 分组场景：同名文件分到不同组 ──
+    print(f"\n  --- 分组场景 ---")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        # 创建两组同名文件
+        group_a_dir = base / "a"
+        group_b_dir = base / "b"
+        group_a_dir.mkdir()
+        group_b_dir.mkdir()
+
+        (group_a_dir / "1.txt").write_text("组A的文本", encoding="utf-8")
+        (group_b_dir / "1.txt").write_text("组B的文本", encoding="utf-8")
+        (group_a_dir / "1.py").write_text("# 组A的代码", encoding="utf-8")
+        (group_b_dir / "1.py").write_text("# 组B的代码", encoding="utf-8")
+
+        mcpk_path = base / "grouped.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            writer.add_file(group_a_dir / "1.txt", group_name="组A")
+            writer.add_file(group_a_dir / "1.py", group_name="组A")
+            writer.add_file(group_b_dir / "1.txt", group_name="组B")
+            writer.add_file(group_b_dir / "1.py", group_name="组B")
+
+        with MCPKReader(mcpk_path) as reader:
+            assert reader.entry_count == 4
+            assert len(reader.groups) == 2
+            print(f"  4 条目, 2 分组 ✓")
+
+            # find_all 应返回所有同名条目
+            txt_entries = reader.find_all("1.txt")
+            assert len(txt_entries) == 2, f"1.txt 应有 2 个条目, 实际 {len(txt_entries)}"
+            py_entries = reader.find_all("1.py")
+            assert len(py_entries) == 2
+            print(f"  find_all: 1.txt×2, 1.py×2 ✓")
+
+            # 使用 group 参数区分同名文件
+            a_txt = reader.extract("1.txt", group="组A")
+            b_txt = reader.extract("1.txt", group="组B")
+            assert a_txt != b_txt, "不同组的 1.txt 内容应不同"
+            assert a_txt == "组A的文本".encode("utf-8")
+            assert b_txt == "组B的文本".encode("utf-8")
+            print(f"  extract(group=) 区分同名文件 ✓")
+
+            a_py = reader.extract("1.py", group="组A")
+            b_py = reader.extract("1.py", group="组B")
+            assert a_py == "# 组A的代码".encode("utf-8")
+            assert b_py == "# 组B的代码".encode("utf-8")
+            print(f"  各组文件内容正确 ✓")
+
+            # 不指定 group 时 find 返回第一个匹配
+            first = reader.find("1.txt")
+            assert first is not None
+            print(f"  find() 无 group 参数返回首个匹配 ✓")
+
+            # 指定不存在的 group 应返回 None
+            assert reader.find("1.txt", group="不存在的组") is None
+            assert reader.find("不存在.txt", group="组A") is None
+            print(f"  find() 不存在时返回 None ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+    # ── 加密场景：同名文件加密 roundtrip ──
+    print(f"\n  --- 加密场景 ---")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        txt_path = base / "1.txt"
+        py_path = base / "1.py"
+        txt_path.write_text("加密文本", encoding="utf-8")
+        py_path.write_text("加密代码", encoding="utf-8")
+
+        password = "samename_pass"
+        mcpk_path = base / "enc_samename.mcpk"
+        with MCPKWriter(mcpk_path, password=password, encryption="xor") as writer:
+            writer.add_file(txt_path)
+            writer.add_file(py_path)
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            assert reader.entry_count == 2
+            assert reader.extract("1.txt") == "加密文本".encode("utf-8")
+            assert reader.extract("1.py") == "加密代码".encode("utf-8")
+            print(f"  加密 roundtrip 正确 ✓")
+
+    # ── 同组同名文件：使用 index 参数区分 ──
+    print(f"\n  --- 同组同名文件 ---")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        # 创建同组内两个同名文件（通过 add_data 指定不同 arcname 模拟）
+        # 实际场景：从不同目录导入时路径不同但文件名相同
+        # 这里用 add_data 直接构造
+        mcpk_path = base / "same_group.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            writer.add_data(b"version 1", "readme.md",
+                            group_name="项目", metadata={"title": "v1"})
+            writer.add_data(b"version 2", "readme.md",
+                            group_name="项目", metadata={"title": "v2"})
+            writer.add_data(b"other file", "other.txt",
+                            group_name="项目")
+
+        with MCPKReader(mcpk_path) as reader:
+            assert reader.entry_count == 3
+            print(f"  3 条目 (2 同名 + 1 不同) ✓")
+
+            # find_all 应找到 2 个 readme.md
+            matches = reader.find_all("readme.md")
+            assert len(matches) == 2
+            print(f"  find_all('readme.md') = 2 个 ✓")
+
+            # index=0 和 index=1 返回不同内容
+            v1 = reader.extract("readme.md", index=0)
+            v2 = reader.extract("readme.md", index=1)
+            assert v1 == b"version 1"
+            assert v2 == b"version 2"
+            assert v1 != v2
+            print(f"  extract(index=0) = 'version 1' ✓")
+            print(f"  extract(index=1) = 'version 2' ✓")
+
+            # 指定 group + index
+            v1_g = reader.extract("readme.md", group="项目", index=0)
+            v2_g = reader.extract("readme.md", group="项目", index=1)
+            assert v1_g == b"version 1"
+            assert v2_g == b"version 2"
+            print(f"  extract(group+index) 组合正确 ✓")
+
+            # index 越界应报错
+            try:
+                reader.extract("readme.md", index=5)
+                assert False, "应抛出 KeyError"
+            except KeyError as e:
+                assert "同名条目" in str(e)
+                print(f"  index 越界报错（含同名提示） ✓")
+
+            # find_all 加 group 过滤
+            matches_in_group = reader.find_all("readme.md", group="项目")
+            assert len(matches_in_group) == 2
+            matches_none = reader.find_all("readme.md", group="不存在")
+            assert len(matches_none) == 0
+            print(f"  find_all(group=) 过滤正确 ✓")
+
+            # get_metadata 区分同名文件
+            meta0 = reader.get_metadata("readme.md", index=0)
+            meta1 = reader.get_metadata("readme.md", index=1)
+            assert meta0["title"] == "v1"
+            assert meta1["title"] == "v2"
+            print(f"  get_metadata(index=) 区分正确 ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
 # ═══════════════════════════════════════════════════════════
 #  主入口
 # ═══════════════════════════════════════════════════════════
@@ -3129,6 +3379,7 @@ QUICK_TESTS = [
     ("test_46",  test_46_encryption_none_still_works, "tiny"),
     ("test_47",  test_47_json_index_empty,       "tiny"),
     ("test_48",  test_48_json_index_complex,     "tiny"),
+    ("test_49",  test_49_same_name_different_ext,"tiny"),
 ]
 
 FULL_TESTS = [
@@ -3181,6 +3432,7 @@ FULL_TESTS = [
     ("test_46",  test_46_encryption_none_still_works, "tiny"),
     ("test_47",  test_47_json_index_empty,       "tiny"),
     ("test_48",  test_48_json_index_complex,     "small"),
+    ("test_49",  test_49_same_name_different_ext,"small"),
 ]
 
 LARGE_TESTS = [
@@ -3197,6 +3449,7 @@ LARGE_TESTS = [
     ("test_21",  test_21_aes_gcm_full_roundtrip, "medium"),
     ("test_27",  test_27_aes_gcm_with_groups_and_relations, "medium"),
     ("test_48",  test_48_json_index_complex,     "medium"),
+    ("test_49",  test_49_same_name_different_ext,"medium"),
 ]
 
 

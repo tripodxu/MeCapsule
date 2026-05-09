@@ -228,9 +228,10 @@ master_key → SHA256(master_key + entry_id + entry_salt) → blob_key → XOR �
 
 | 类型 | 扩展名 | entry_type | 压缩策略 |
 |------|--------|------------|----------|
-| 文档 | .md .txt .json .csv .html .xml .yaml | DOCUMENT | zlib |
+| 文档 | .md .txt .json .csv .html .xml .yaml .toml .ini .cfg .log | DOCUMENT | zlib |
 | 文档 | .pdf .docx .doc .xlsx .pptx | DOCUMENT | 无（内部已压缩） |
 | 字幕 | .srt .vtt .ass | DOCUMENT | zlib |
+| 代码 | .py .js .ts .jsx .tsx .java .c .cpp .h .hpp .go .rs .rb .php .swift .kt .sh .bash .bat .ps1 .css .scss .sql .r .lua | DOCUMENT | zlib |
 | 图片 | .jpg .png .gif .webp .svg .ico | IMAGE | 无 |
 | 图片 | .bmp .tiff | IMAGE | zlib |
 | 音频 | .mp3 .ogg .flac .aac .m4a .wma | AUDIO | 无 |

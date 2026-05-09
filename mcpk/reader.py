@@ -147,11 +147,35 @@ class MCPKReader:
             return self.entries
         return [e for e in self._entries if e.entry_type == entry_type]
 
-    def find(self, name: str) -> Optional[TocEntry]:
-        for entry in self._entries:
-            if entry.name == name:
-                return entry
+    def find(self, name: str, *, group: Optional[Union[str, int]] = None,
+             index: int = 0) -> Optional[TocEntry]:
+        """按文件名查找条目。
+
+        Args:
+            name: 文件名
+            group: 分组名或 group_id，区分不同组的同名文件
+            index: 同组同名文件的索引（0=第一个，1=第二个，以此类推）
+
+        Returns:
+            匹配的 TocEntry，不存在返回 None
+        """
+        matches = self.find_all(name, group=group)
+        if index < len(matches):
+            return matches[index]
         return None
+
+    def find_all(self, name: str, *, group: Optional[Union[str, int]] = None) -> list[TocEntry]:
+        """返回所有同名条目。可按分组过滤。"""
+        entries = self._entries
+        if group is not None:
+            if isinstance(group, int):
+                entries = [e for e in entries if e.group_id == group]
+            else:
+                g = self.find_group(group)
+                if g is None:
+                    return []  # 分组不存在，直接返回空
+                entries = [e for e in entries if e.group_id == g.group_id]
+        return [e for e in entries if e.name == name]
 
     def find_group(self, name: str) -> Optional[GroupEntry]:
         for group in self._groups:
@@ -165,9 +189,26 @@ class MCPKReader:
             raise KeyError(f"分组不存在: {group_name}")
         return [self._entries[eid] for eid in group.entry_ids if eid < len(self._entries)]
 
-    def extract(self, name: str) -> bytes:
-        entry = self.find(name)
+    def extract(self, name: str, *, group: Optional[Union[str, int]] = None,
+                index: int = 0) -> bytes:
+        """提取文件内容。
+
+        Args:
+            name: 文件名
+            group: 分组名或 group_id，区分不同组的同名文件
+            index: 同组同名文件的索引（0=第一个）
+        """
+        entry = self.find(name, group=group, index=index)
         if entry is None:
+            hint = ""
+            if group is not None:
+                hint += f", 分组: {group}"
+            if index > 0:
+                hint += f", 索引: {index}"
+            # 提示有多少同名文件
+            all_matches = self.find_all(name)
+            if all_matches:
+                raise KeyError(f"文件不存在: {name}{hint}（共找到 {len(all_matches)} 个同名条目）")
             raise KeyError(f"文件不存在: {name}")
         return self.extract_entry(entry)
 
@@ -219,8 +260,10 @@ class MCPKReader:
         return original_data
 
     def extract_to(self, name: str, output_dir: Union[str, Path], *,
-                   preserve_structure: bool = True) -> Path:
-        data = self.extract(name)
+                   preserve_structure: bool = True,
+                   group: Optional[Union[str, int]] = None,
+                   index: int = 0) -> Path:
+        data = self.extract(name, group=group, index=index)
         output_dir = Path(output_dir)
         out_path = output_dir / name if preserve_structure else output_dir / Path(name).name
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -246,8 +289,9 @@ class MCPKReader:
             for e in entries
         ]
 
-    def get_metadata(self, name: str) -> dict:
-        entry = self.find(name)
+    def get_metadata(self, name: str, *, group: Optional[Union[str, int]] = None,
+                     index: int = 0) -> dict:
+        entry = self.find(name, group=group, index=index)
         if entry is None:
             raise KeyError(f"文件不存在: {name}")
         return entry.metadata_dict()
