@@ -33,8 +33,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from mcpk.writer import MCPKWriter
 from mcpk.reader import MCPKReader, MCPKError
 from mcpk.constants import (
-    EntryType, Compression, GroupType, RelationType, NO_GROUP,
-    MAGIC, VERSION, EncryptionMode,
+    EntryType, Compression, GroupType, RelationType, IntraRelationType,
+    NO_GROUP, MAGIC, VERSION, EncryptionMode, KdfType,
 )
 
 
@@ -1497,8 +1497,8 @@ def test_16_encrypt_full_roundtrip(sizes: dict):
         password = "test_password_2026"
         mcpk_path = base / "encrypted.mcpk"
 
-        # 打包加密
-        with MCPKWriter(mcpk_path, password=password) as writer:
+        # 打包加密（使用 XOR 保证零依赖可用）
+        with MCPKWriter(mcpk_path, password=password, encryption="xor") as writer:
             for name, path in files.items():
                 writer.add_file(path, metadata={"title": name})
 
@@ -1563,7 +1563,7 @@ def test_17_encrypt_metadata_only(sizes: dict):
         mcpk_path = base / "meta_enc.mcpk"
 
         with MCPKWriter(mcpk_path, password=password,
-                        encrypt_mode="metadata_only") as writer:
+                        encrypt_mode="metadata_only", encryption="xor") as writer:
             writer.add_file(txt_path)
             writer.add_file(mp4_path)
 
@@ -1697,7 +1697,7 @@ def test_20_encrypt_with_groups(sizes: dict):
         password = "group_encrypt_test"
         mcpk_path = base / "enc_grouped.mcpk"
 
-        with MCPKWriter(mcpk_path, password=password) as writer:
+        with MCPKWriter(mcpk_path, password=password, encryption="xor") as writer:
             writer.add_file(files["video1.mp4"], group_name="第1讲")
             writer.add_file(files["sub1.srt"], group_name="第1讲")
             writer.add_file(files["video2.mp4"], group_name="第2讲")
@@ -1729,6 +1729,1353 @@ def test_20_encrypt_with_groups(sizes: dict):
 
 
 # ═══════════════════════════════════════════════════════════
+#  v2.2 新增测试：AES-GCM / Tags / IntraRelations / import_folder / JSON Index
+# ═══════════════════════════════════════════════════════════
+
+def _try_aes_writer(*args, **kwargs):
+    """尝试创建 AES 加密 Writer，cryptography 不可用时返回 None。"""
+    try:
+        return MCPKWriter(*args, **kwargs)
+    except ImportError:
+        return None
+
+
+def test_21_aes_gcm_full_roundtrip(sizes: dict):
+    """AES-256-GCM FULL 模式完整 roundtrip。"""
+    label = "AES-GCM FULL 模式"
+    print("\n" + "=" * 60)
+    print(f"测试 21: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        files = {}
+        for name, gen_fn, size_key, seed in [
+            ("doc.txt", gen_text_file, "text", 1),
+            ("photo.jpg", gen_jpeg_file, "image", 2),
+            ("video.mp4", gen_mp4_file, "video", 3),
+        ]:
+            p = base / name
+            gen_fn(p, sizes[size_key], seed=seed)
+            files[name] = p
+
+        password = "aes_test_2026"
+        mcpk_path = base / "aes_encrypted.mcpk"
+
+        writer = _try_aes_writer(mcpk_path, password=password, encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            for name, path in files.items():
+                writer.add_file(path, metadata={"title": name})
+
+        assert mcpk_path.stat().st_size > 0
+        print(f"  文件大小: {mcpk_path.stat().st_size} bytes")
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            assert reader.version == 2
+            assert reader.is_encrypted
+            assert reader.encryption_params is not None
+            assert reader.encryption_params.kdf_type == 0x02  # PBKDF2_AES
+            assert reader.encryption_params.kdf_iterations == 600_000
+            print(f"  KDF: PBKDF2_AES, iterations={reader.encryption_params.kdf_iterations} ✓")
+
+            errors = reader.verify()
+            assert not errors, f"校验失败: {errors}"
+            print(f"  完整性校验通过 ✓")
+
+            for name, path in files.items():
+                extracted = reader.extract(name)
+                original = path.read_bytes()
+                assert extracted == original
+            print(f"  全部 {len(files)} 文件内容一致 ✓")
+
+        # 密码错误
+        try:
+            with MCPKReader(mcpk_path, password="wrong") as reader:
+                pass
+            assert False
+        except MCPKError as e:
+            assert "密码错误" in str(e)
+            print(f"  密码错误检测正确 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_22_aes_gcm_metadata_only(sizes: dict):
+    """AES-256-GCM METADATA_ONLY 模式。"""
+    label = "AES-GCM METADATA_ONLY"
+    print("\n" + "=" * 60)
+    print(f"测试 22: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        txt_path = base / "notes.txt"
+        gen_text_file(txt_path, sizes["text"], seed=10)
+        mp4_path = base / "video.mp4"
+        gen_mp4_file(mp4_path, sizes["video"], seed=11)
+
+        password = "meta_aes_pass"
+        mcpk_path = base / "meta_aes.mcpk"
+
+        writer = _try_aes_writer(mcpk_path, password=password,
+                        encrypt_mode="metadata_only", encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            writer.add_file(txt_path)
+            writer.add_file(mp4_path)
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            assert reader.is_encrypted
+            assert reader.encryption_params.encrypt_mode == EncryptionMode.METADATA_ONLY
+            assert reader.encryption_params.is_aes  # AES 模式
+            print(f"  模式: METADATA_ONLY + AES-GCM ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+            for name in ["notes.txt", "video.mp4"]:
+                data = reader.extract(name)
+                assert len(data) > 0
+            print(f"  内容提取正确 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_23_aes_gcm_data_only(sizes: dict):
+    """AES-256-GCM DATA_ONLY 模式。"""
+    label = "AES-GCM DATA_ONLY"
+    print("\n" + "=" * 60)
+    print(f"测试 23: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        txt_path = base / "data.txt"
+        gen_text_file(txt_path, sizes["text"], seed=20)
+
+        password = "data_aes_pass"
+        mcpk_path = base / "data_aes.mcpk"
+
+        writer = _try_aes_writer(mcpk_path, password=password,
+                        encrypt_mode="data_only", encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            writer.add_file(txt_path)
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            assert reader.is_encrypted
+            assert reader.encryption_params.encrypt_mode == EncryptionMode.DATA_ONLY
+            print(f"  模式: DATA_ONLY + AES-GCM ✓")
+
+            data = reader.extract("data.txt")
+            assert data == txt_path.read_bytes()
+            print(f"  内容一致 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_24_aes_gcm_wrong_password(sizes: dict):
+    """AES-GCM 各种错误密码场景。"""
+    label = "AES-GCM 错误密码"
+    print("\n" + "=" * 60)
+    print(f"测试 24: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        txt_path = base / "secret.txt"
+        gen_text_file(txt_path, sizes["text"], seed=30)
+
+        password = "correct_password"
+        mcpk_path = base / "secret.mcpk"
+
+        writer = _try_aes_writer(mcpk_path, password=password, encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            writer.add_file(txt_path)
+
+        # 完全错误的密码
+        try:
+            with MCPKReader(mcpk_path, password="wrong") as reader:
+                pass
+            assert False
+        except MCPKError as e:
+            assert "密码错误" in str(e)
+            print(f"  错误密码检测 ✓")
+
+        # 空密码
+        try:
+            with MCPKReader(mcpk_path, password="") as reader:
+                pass
+            assert False
+        except MCPKError as e:
+            assert "密码错误" in str(e)
+            print(f"  空密码检测 ✓")
+
+        # 不提供密码
+        try:
+            with MCPKReader(mcpk_path) as reader:
+                pass
+            assert False
+        except MCPKError as e:
+            assert "密码" in str(e)
+            print(f"  缺少密码检测 ✓")
+
+        # 正确密码
+        with MCPKReader(mcpk_path, password=password) as reader:
+            data = reader.extract("secret.txt")
+            assert data == txt_path.read_bytes()
+            print(f"  正确密码解密 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_25_aes_gcm_tamper_detection(sizes: dict):
+    """AES-GCM 篡改检测：修改密文应解密失败。"""
+    label = "AES-GCM 篡改检测"
+    print("\n" + "=" * 60)
+    print(f"测试 25: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        txt_path = base / "data.txt"
+        gen_text_file(txt_path, sizes["text"], seed=40)
+
+        password = "tamper_test"
+        mcpk_path = base / "tamper.mcpk"
+
+        writer = _try_aes_writer(mcpk_path, password=password, encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            writer.add_file(txt_path)
+
+        # 读取文件，篡改数据区的一个字节
+        data = bytearray(mcpk_path.read_bytes())
+        # 找到 blob 数据区（在 header + ep + magic_index 之后）
+        # 简单方法：篡改文件中间的字节
+        mid = len(data) // 2
+        data[mid] ^= 0xFF
+        tampered_path = base / "tampered.mcpk"
+        tampered_path.write_bytes(bytes(data))
+
+        try:
+            with MCPKReader(tampered_path, password=password) as reader:
+                # 读取可能在校验阶段就失败
+                try:
+                    reader.extract("data.txt")
+                    # 如果 extract 没失败，verify 应该失败
+                    errors = reader.verify()
+                    assert len(errors) > 0
+                except MCPKError:
+                    pass
+            print(f"  篡改检测正确 ✓")
+        except MCPKError:
+            print(f"  篡改检测正确（加载阶段） ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_26_xor_backward_compat(sizes: dict):
+    """XOR 加密向后兼容（encryption='xor'）。"""
+    label = "XOR 向后兼容"
+    print("\n" + "=" * 60)
+    print(f"测试 26: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        files = {}
+        for name, gen_fn, size_key, seed in [
+            ("doc.txt", gen_text_file, "text", 50),
+            ("pic.jpg", gen_jpeg_file, "image", 51),
+        ]:
+            p = base / name
+            gen_fn(p, sizes[size_key], seed=seed)
+            files[name] = p
+
+        password = "xor_compat"
+        mcpk_path = base / "xor_file.mcpk"
+
+        # 使用 XOR 加密
+        with MCPKWriter(mcpk_path, password=password, encryption="xor") as writer:
+            for name, path in files.items():
+                writer.add_file(path)
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            assert reader.is_encrypted
+            assert reader.encryption_params.kdf_type == 0x01  # SHA256_XOR
+            print(f"  KDF: SHA256_XOR ✓")
+
+            for name, path in files.items():
+                extracted = reader.extract(name)
+                original = path.read_bytes()
+                assert extracted == original
+            print(f"  全部内容一致 ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_27_aes_gcm_with_groups_and_relations(sizes: dict):
+    """AES-GCM + 分组 + 关系组合。"""
+    label = "AES-GCM + 分组 + 关系"
+    print("\n" + "=" * 60)
+    print(f"测试 27: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        files = {}
+        for i in range(1, 3):
+            p = base / f"video{i}.mp4"
+            gen_mp4_file(p, sizes["video"] // 2, seed=600 + i)
+            files[f"video{i}.mp4"] = p
+            p = base / f"sub{i}.srt"
+            gen_srt_file(p, 20, seed=700 + i)
+            files[f"sub{i}.srt"] = p
+
+        password = "group_aes_test"
+        mcpk_path = base / "group_aes.mcpk"
+
+        writer = _try_aes_writer(mcpk_path, password=password, encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            writer.add_file(files["video1.mp4"], group_name="第1讲")
+            writer.add_file(files["sub1.srt"], group_name="第1讲")
+            writer.add_file(files["video2.mp4"], group_name="第2讲")
+            writer.add_file(files["sub2.srt"], group_name="第2讲")
+            writer.add_relation("第1讲", "第2讲", RelationType.SEQUEL)
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            assert reader.is_encrypted
+            assert len(reader.groups) == 2
+            assert len(reader.relations) == 1
+            print(f"  2 分组, 1 关系 ✓")
+
+            for g in reader.groups:
+                entries = reader.list_group_entries(g.name)
+                for e in entries:
+                    data = reader.extract(e.name)
+                    original = files[e.name].read_bytes()
+                    assert data == original
+            print(f"  分组内容全部一致 ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_28_group_tags_basic(sizes: dict):
+    """分组 Tag 标签：创建时带标签 + roundtrip。"""
+    label = "分组 Tag 标签"
+    print("\n" + "=" * 60)
+    print(f"测试 28: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        txt_path = base / "doc.txt"
+        gen_text_file(txt_path, sizes["text"], seed=80)
+        jpg_path = base / "photo.jpg"
+        gen_jpeg_file(jpg_path, sizes["image"], seed=81)
+
+        mcpk_path = base / "tags.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            g1 = writer.create_group("工作文档", GroupType.DOCUMENT_SET,
+                                      tags=["工作", "2026", "重要"])
+            writer.add_file(txt_path, group=g1)
+
+            g2 = writer.create_group("旅行照片", GroupType.MEDIA_ALBUM,
+                                      tags=["旅行", "风景"])
+            writer.add_file(jpg_path, group=g2)
+
+        with MCPKReader(mcpk_path) as reader:
+            assert len(reader.groups) == 2
+
+            g1 = reader.find_group("工作文档")
+            assert g1 is not None
+            assert g1.tags == ["工作", "2026", "重要"]
+            print(f"  工作文档: tags={g1.tags} ✓")
+
+            g2 = reader.find_group("旅行照片")
+            assert g2 is not None
+            assert g2.tags == ["旅行", "风景"]
+            print(f"  旅行照片: tags={g2.tags} ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_29_add_tag_dynamic(sizes: dict):
+    """动态添加 Tag 标签。"""
+    label = "动态添加 Tag"
+    print("\n" + "=" * 60)
+    print(f"测试 29: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        txt_path = base / "note.txt"
+        gen_text_file(txt_path, sizes["text"], seed=90)
+
+        mcpk_path = base / "dynamic_tags.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            g = writer.create_group("笔记", tags=["初始标签"])
+            writer.add_file(txt_path, group=g)
+            # 动态添加
+            writer.add_tag(g, "动态标签1")
+            writer.add_tag(g, "动态标签2")
+            writer.add_tag(g, "初始标签")  # 重复，不应添加
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("笔记")
+            assert g.tags == ["初始标签", "动态标签1", "动态标签2"]
+            print(f"  tags={g.tags} (无重复) ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_30_intra_relation_basic(sizes: dict):
+    """组内关系基本功能。"""
+    label = "组内关系基本"
+    print("\n" + "=" * 60)
+    print(f"测试 30: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        vid_path = base / "lecture.mp4"
+        gen_mp4_file(vid_path, sizes["video"], seed=100)
+        sub_path = base / "lecture.srt"
+        gen_srt_file(sub_path, 30, seed=101)
+
+        mcpk_path = base / "intra_rel.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            writer.add_file(vid_path, group_name="课程")
+            writer.add_file(sub_path, group_name="课程")
+            writer.add_intra_relation(
+                "课程", source="lecture.srt", target="lecture.mp4",
+                relation_type=IntraRelationType.SUBTITLE_OF,
+                description="字幕属于视频",
+            )
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("课程")
+            assert g is not None
+            assert len(g.intra_relations) == 1
+
+            ir = g.intra_relations[0]
+            assert ir.relation_type == IntraRelationType.SUBTITLE_OF
+            assert ir.description == "字幕属于视频"
+            # source=srt, target=mp4
+            assert reader.entries[ir.source_entry].name == "lecture.srt"
+            assert reader.entries[ir.target_entry].name == "lecture.mp4"
+            print(f"  SUBTITLE_OF: lecture.srt -> lecture.mp4 ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_31_multiple_intra_relations(sizes: dict):
+    """多个组内关系。"""
+    label = "多组内关系"
+    print("\n" + "=" * 60)
+    print(f"测试 31: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        vid = base / "meeting.mp4"
+        gen_mp4_file(vid, sizes["video"], seed=110)
+        transcript = base / "transcript.txt"
+        gen_text_file(transcript, sizes["text"], seed=111)
+        thumb = base / "thumb.jpg"
+        gen_jpeg_file(thumb, 500, seed=112)
+        notes = base / "notes.md"
+        gen_text_file(notes, sizes["text"], seed=113)
+
+        mcpk_path = base / "multi_intra.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            writer.add_file(vid, group_name="会议")
+            writer.add_file(transcript, group_name="会议")
+            writer.add_file(thumb, group_name="会议")
+            writer.add_file(notes, group_name="会议")
+
+            writer.add_intra_relation(
+                "会议", source="transcript.txt", target="meeting.mp4",
+                relation_type=IntraRelationType.TRANSCRIPT_OF,
+            )
+            writer.add_intra_relation(
+                "会议", source="thumb.jpg", target="meeting.mp4",
+                relation_type=IntraRelationType.THUMBNAIL_OF,
+            )
+            writer.add_intra_relation(
+                "会议", source="notes.md", target="meeting.mp4",
+                relation_type=IntraRelationType.ANNOTATION_OF,
+                description="会议批注",
+            )
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("会议")
+            assert len(g.intra_relations) == 3
+            types = [ir.relation_type for ir in g.intra_relations]
+            assert IntraRelationType.TRANSCRIPT_OF in types
+            assert IntraRelationType.THUMBNAIL_OF in types
+            assert IntraRelationType.ANNOTATION_OF in types
+            print(f"  3 条组内关系: TRANSCRIPT_OF, THUMBNAIL_OF, ANNOTATION_OF ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_32_tags_and_intra_with_encryption(sizes: dict):
+    """Tags + 组内关系 + AES-GCM 加密组合。"""
+    label = "Tags+组内关系+加密"
+    print("\n" + "=" * 60)
+    print(f"测试 32: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        vid = base / "v.mp4"
+        gen_mp4_file(vid, sizes["video"], seed=120)
+        sub = base / "v.srt"
+        gen_srt_file(sub, 20, seed=121)
+
+        password = "combo_test"
+        mcpk_path = base / "combo.mcpk"
+        writer = _try_aes_writer(mcpk_path, password=password, encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            g = writer.create_group("视频集", GroupType.VIDEO_SUBTITLE,
+                                     tags=["加密", "视频"])
+            writer.add_file(vid, group=g)
+            writer.add_file(sub, group=g)
+            writer.add_intra_relation(
+                "视频集", source="v.srt", target="v.mp4",
+                relation_type=IntraRelationType.SUBTITLE_OF,
+            )
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            assert reader.is_encrypted
+            g = reader.find_group("视频集")
+            assert g.tags == ["加密", "视频"]
+            assert len(g.intra_relations) == 1
+            print(f"  加密 + tags + 组内关系 ✓")
+
+            for e in reader.list_group_entries("视频集"):
+                data = reader.extract(e.name)
+                assert len(data) == e.original_size
+            print(f"  内容提取正确 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_33_import_folder_basic(sizes: dict):
+    """import_folder 基本功能。"""
+    label = "import_folder 基本"
+    print("\n" + "=" * 60)
+    print(f"测试 33: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        folder = base / "项目资料"
+        folder.mkdir()
+        (folder / "readme.md").write_text("项目说明", encoding="utf-8")
+        (folder / "data.json").write_text('{"key": "value"}', encoding="utf-8")
+        gen_text_file(folder / "notes.txt", sizes["text"], seed=130)
+
+        mcpk_path = base / "folder.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            g = writer.import_folder(folder)
+
+        assert g.name == "项目资料"
+        assert len(g.entry_ids) == 3
+        print(f"  组名=项目资料, 3 文件 ✓")
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("项目资料")
+            assert g is not None
+            assert len(g.entry_ids) == 3
+            names = sorted(e.name for e in reader.list_group_entries("项目资料"))
+            assert "readme.md" in names
+            assert "data.json" in names
+            assert "notes.txt" in names
+            print(f"  文件: {names} ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_34_import_folder_multiple(sizes: dict):
+    """多个文件夹导入。"""
+    label = "import_folder 多文件夹"
+    print("\n" + "=" * 60)
+    print(f"测试 34: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        # 文件夹 A
+        folder_a = base / "文件夹A"
+        folder_a.mkdir()
+        for i in range(3):
+            gen_text_file(folder_a / f"a_{i}.txt", 200, seed=140 + i)
+
+        # 文件夹 B
+        folder_b = base / "文件夹B"
+        folder_b.mkdir()
+        gen_jpeg_file(folder_b / "photo.jpg", sizes["image"], seed=150)
+        gen_srt_file(folder_b / "sub.srt", 10, seed=151)
+
+        mcpk_path = base / "multi_folder.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            writer.import_folder(folder_a, tags=["集合A"])
+            writer.import_folder(folder_b, tags=["集合B"])
+
+        with MCPKReader(mcpk_path) as reader:
+            assert len(reader.groups) == 2
+            ga = reader.find_group("文件夹A")
+            gb = reader.find_group("文件夹B")
+            assert len(ga.entry_ids) == 3
+            assert len(gb.entry_ids) == 2
+            assert ga.tags == ["集合A"]
+            assert gb.tags == ["集合B"]
+            print(f"  文件夹A: 3 文件, tags={ga.tags} ✓")
+            print(f"  文件夹B: 2 文件, tags={gb.tags} ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_35_import_folder_non_recursive(sizes: dict):
+    """import_folder non-recursive 模式。"""
+    label = "import_folder 非递归"
+    print("\n" + "=" * 60)
+    print(f"测试 35: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        folder = base / "src"
+        folder.mkdir()
+        (folder / "top.txt").write_text("顶层文件", encoding="utf-8")
+        sub = folder / "sub"
+        sub.mkdir()
+        (sub / "nested.txt").write_text("嵌套文件", encoding="utf-8")
+
+        # 非递归
+        mcpk_path = base / "non_recursive.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            writer.import_folder(folder, recursive=False)
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("src")
+            assert len(g.entry_ids) == 1  # 只有 top.txt
+            assert reader.entries[g.entry_ids[0]].name == "top.txt"
+            print(f"  非递归: 只含顶层文件 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_36_json_index_basic(sizes: dict):
+    """JSON 索引基本加载。"""
+    label = "JSON 索引基本"
+    print("\n" + "=" * 60)
+    print(f"测试 36: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        project = base / "project"
+        project.mkdir()
+
+        # 创建文件
+        gen_mp4_file(project / "lecture1.mp4", sizes["video"], seed=160)
+        gen_srt_file(project / "lecture1.srt", 20, seed=161)
+        gen_text_file(project / "notes.md", sizes["text"], seed=162)
+
+        # 创建索引
+        index = {
+            "name": "课程包",
+            "groups": [
+                {
+                    "name": "第1讲",
+                    "type": "VIDEO_SUBTITLE",
+                    "tags": ["ML", "入门"],
+                    "metadata": {"week": 1},
+                    "files": [
+                        {"path": "lecture1.mp4", "title": "第1讲视频"},
+                        "lecture1.srt",
+                    ],
+                },
+            ],
+            "standalone_files": ["notes.md"],
+            "relations": [
+                {"source": "第1讲", "target": "第1讲", "type": "RELATED",
+                 "desc": "自引用测试"},
+            ],
+        }
+        index_path = base / "index.json"
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False)
+
+        mcpk_path = base / "indexed.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            result = writer.load_index(index_path, base_dir=project)
+
+        assert result["loaded"] == 3
+        assert result["groups_created"] == 1
+        assert result["relations_created"] == 1
+        assert len(result["skipped"]) == 0
+        print(f"  加载: 3 文件, 1 分组, 1 关系, 0 跳过 ✓")
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("第1讲")
+            assert g is not None
+            assert g.tags == ["ML", "入门"]
+            assert g.group_type == GroupType.VIDEO_SUBTITLE
+            assert len(g.entry_ids) == 2
+            print(f"  第1讲: tags={g.tags}, type=VIDEO_SUBTITLE, 2 条目 ✓")
+
+            # standalone
+            assert reader.find("notes.md") is not None
+            print(f"  standalone: notes.md ✓")
+
+            assert len(reader.relations) == 1
+            print(f"  关系: 1 ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_37_json_index_missing_files(sizes: dict):
+    """JSON 索引缺失文件：跳过并警告。"""
+    label = "JSON 索引缺失文件"
+    print("\n" + "=" * 60)
+    print(f"测试 37: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        project = base / "project"
+        project.mkdir()
+
+        gen_text_file(project / "exists.txt", sizes["text"], seed=170)
+        # missing.txt 不创建
+
+        index = {
+            "groups": [
+                {
+                    "name": "测试组",
+                    "files": [
+                        "exists.txt",
+                        "missing.txt",
+                        "also_missing.txt",
+                    ],
+                },
+            ],
+            "standalone_files": [
+                "another_missing.txt",
+                {"path": "exists.txt"},
+            ],
+        }
+        index_path = base / "index.json"
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False)
+
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            mcpk_path = base / "partial.mcpk"
+            with MCPKWriter(mcpk_path) as writer:
+                result = writer.load_index(index_path, base_dir=project)
+
+        assert result["loaded"] == 2  # exists.txt from group + exists.txt standalone
+        assert len(result["skipped"]) == 3  # 3 missing files
+        print(f"  加载: 2, 跳过: 3 ✓")
+        for path, reason in result["skipped"]:
+            print(f"    跳过: {path} ({reason})")
+
+        with MCPKReader(mcpk_path) as reader:
+            # exists.txt appears twice (once in group, once standalone)
+            assert reader.entry_count >= 1
+            print(f"  读取正常 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_38_json_index_with_intra_relations(sizes: dict):
+    """JSON 索引含组内关系。"""
+    label = "JSON 索引组内关系"
+    print("\n" + "=" * 60)
+    print(f"测试 38: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        project = base / "project"
+        project.mkdir()
+
+        gen_mp4_file(project / "video.mp4", sizes["video"], seed=180)
+        gen_srt_file(project / "video.srt", 15, seed=181)
+        gen_jpeg_file(project / "thumb.jpg", 500, seed=182)
+
+        index = {
+            "groups": [
+                {
+                    "name": "视频组",
+                    "files": ["video.mp4", "video.srt", "thumb.jpg"],
+                },
+            ],
+            "intra_relations": [
+                {"group": "视频组", "source": "video.srt", "target": "video.mp4",
+                 "type": "SUBTITLE_OF", "desc": "字幕"},
+                {"group": "视频组", "source": "thumb.jpg", "target": "video.mp4",
+                 "type": "THUMBNAIL_OF"},
+            ],
+        }
+        index_path = base / "index.json"
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False)
+
+        mcpk_path = base / "intra_indexed.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            result = writer.load_index(index_path, base_dir=project)
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("视频组")
+            assert len(g.intra_relations) == 2
+            types = {ir.relation_type for ir in g.intra_relations}
+            assert IntraRelationType.SUBTITLE_OF in types
+            assert IntraRelationType.THUMBNAIL_OF in types
+            print(f"  2 条组内关系 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_39_json_index_with_encryption(sizes: dict):
+    """JSON 索引 + AES-GCM 加密组合。"""
+    label = "JSON 索引 + 加密"
+    print("\n" + "=" * 60)
+    print(f"测试 39: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        project = base / "project"
+        project.mkdir()
+
+        gen_text_file(project / "secret.md", sizes["text"], seed=190)
+
+        index = {
+            "groups": [{"name": "机密", "files": ["secret.md"]}],
+        }
+        index_path = base / "index.json"
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(index, f)
+
+        password = "index_aes"
+        mcpk_path = base / "enc_indexed.mcpk"
+        writer = _try_aes_writer(mcpk_path, password=password, encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            writer.load_index(index_path, base_dir=project)
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            assert reader.is_encrypted
+            g = reader.find_group("机密")
+            assert g is not None
+            data = reader.extract("secret.md")
+            assert len(data) > 0
+            print(f"  加密索引包: 内容正确 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_40_inspect_with_new_fields(sizes: dict):
+    """inspect 输出包含新字段（tags, intra_rels, kdf_type）。"""
+    label = "Inspect 新字段"
+    print("\n" + "=" * 60)
+    print(f"测试 40: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        vid = base / "v.mp4"
+        gen_mp4_file(vid, sizes["video"], seed=200)
+        sub = base / "v.srt"
+        gen_srt_file(sub, 10, seed=201)
+
+        password = "inspect_test"
+        mcpk_path = base / "inspect_new.mcpk"
+        writer = _try_aes_writer(mcpk_path, password=password, encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            g = writer.create_group("视频", GroupType.VIDEO_SUBTITLE,
+                                     tags=["测试", "inspect"])
+            writer.add_file(vid, group=g)
+            writer.add_file(sub, group=g)
+            writer.add_intra_relation(
+                "视频", source="v.srt", target="v.mp4",
+                relation_type=IntraRelationType.SUBTITLE_OF,
+            )
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            info = reader.inspect()
+
+            # 新字段
+            assert info["kdf_type"] == "PBKDF2_AES"
+            assert info["kdf_iterations"] == 600_000
+            print(f"  kdf_type: {info['kdf_type']}, iterations: {info['kdf_iterations']} ✓")
+
+            g_info = info["groups"][0]
+            assert g_info["tags"] == ["测试", "inspect"]
+            assert len(g_info["intra_relations"]) == 1
+            assert g_info["intra_relations"][0]["type"] == "SUBTITLE_OF"
+            print(f"  tags: {g_info['tags']} ✓")
+            print(f"  intra_relations: {g_info['intra_relations'][0]['type']} ✓")
+
+            # JSON 可序列化
+            json_str = json.dumps(info, ensure_ascii=False, indent=2)
+            assert len(json_str) > 100
+            print(f"  JSON 输出: {len(json_str)} 字符 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_41_tag_deduplication(sizes: dict):
+    """Tag 去重验证。"""
+    label = "Tag 去重"
+    print("\n" + "=" * 60)
+    print(f"测试 41: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        txt = base / "f.txt"
+        gen_text_file(txt, 200, seed=210)
+
+        mcpk_path = base / "dedup.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            g = writer.create_group("G", tags=["a", "b", "c"])
+            writer.add_tag(g, "b")  # 重复
+            writer.add_tag(g, "d")
+            writer.add_tag(g, "a")  # 重复
+            writer.add_file(txt, group=g)
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("G")
+            assert g.tags == ["a", "b", "c", "d"]
+            print(f"  tags={g.tags} (无重复) ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_42_many_tags_per_group(sizes: dict):
+    """每组大量 Tag 标签。"""
+    label = "大量 Tag"
+    print("\n" + "=" * 60)
+    print(f"测试 42: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        txt = base / "f.txt"
+        gen_text_file(txt, 200, seed=220)
+
+        many_tags = [f"tag_{i:03d}" for i in range(50)]
+        mcpk_path = base / "many_tags.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            g = writer.create_group("大数据", tags=many_tags)
+            writer.add_file(txt, group=g)
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("大数据")
+            assert len(g.tags) == 50
+            assert g.tags == many_tags
+            print(f"  50 个 tags roundtrip 正确 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_43_intra_relation_custom_type(sizes: dict):
+    """组内关系 CUSTOM 类型。"""
+    label = "IntraRelation CUSTOM"
+    print("\n" + "=" * 60)
+    print(f"测试 43: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        a = base / "a.txt"
+        a.write_text("文件A", encoding="utf-8")
+        b = base / "b.txt"
+        b.write_text("文件B", encoding="utf-8")
+
+        mcpk_path = base / "custom_intra.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            writer.add_file(a, group_name="G")
+            writer.add_file(b, group_name="G")
+            writer.add_intra_relation(
+                "G", source="a.txt", target="b.txt",
+                relation_type=IntraRelationType.CUSTOM,
+                description="自定义关系",
+            )
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("G")
+            ir = g.intra_relations[0]
+            assert ir.relation_type == IntraRelationType.CUSTOM
+            assert ir.description == "自定义关系"
+            print(f"  CUSTOM 类型 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_44_import_folder_with_tags_and_relations(sizes: dict):
+    """import_folder + tags + 组间关系。"""
+    label = "import_folder + tags + 关系"
+    print("\n" + "=" * 60)
+    print(f"测试 44: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        f1 = base / "课程资料"
+        f1.mkdir()
+        gen_text_file(f1 / "slides.md", sizes["text"], seed=230)
+
+        f2 = base / "作业"
+        f2.mkdir()
+        gen_text_file(f2 / "hw1.md", sizes["text"], seed=231)
+
+        mcpk_path = base / "folder_rel.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            writer.import_folder(f1, tags=["课程"], group_type=GroupType.COURSE)
+            writer.import_folder(f2, tags=["作业"])
+            writer.add_relation("课程资料", "作业", RelationType.REFERENCES,
+                                description="课程引用作业")
+
+        with MCPKReader(mcpk_path) as reader:
+            assert len(reader.groups) == 2
+            assert len(reader.relations) == 1
+            g1 = reader.find_group("课程资料")
+            assert g1.tags == ["课程"]
+            assert g1.group_type == GroupType.COURSE
+            print(f"  课程资料: tags={g1.tags}, type=COURSE ✓")
+            print(f"  关系: 课程资料 --[REFERENCES]--> 作业 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_45_all_intra_relation_types(sizes: dict):
+    """覆盖所有 IntraRelationType 枚举值。"""
+    label = "所有 IntraRelationType"
+    print("\n" + "=" * 60)
+    print(f"测试 45: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        # 创建 10 个文件
+        files = []
+        for i in range(10):
+            p = base / f"f{i}.txt"
+            p.write_text(f"文件{i}", encoding="utf-8")
+            files.append(f"f{i}.txt")
+
+        mcpk_path = base / "all_types.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            for f in files:
+                writer.add_file(base / f, group_name="全类型")
+
+            # 为每种 IntraRelationType 创建一条关系
+            all_types = [
+                IntraRelationType.SUBTITLE_OF,
+                IntraRelationType.ATTACHMENT_OF,
+                IntraRelationType.TRANSCRIPT_OF,
+                IntraRelationType.THUMBNAIL_OF,
+                IntraRelationType.ANNOTATION_OF,
+                IntraRelationType.CHAPTER_OF,
+                IntraRelationType.SUPPLEMENT_OF,
+                IntraRelationType.DERIVED_FROM,
+                IntraRelationType.VERSION_OF,
+            ]
+            for i, rt in enumerate(all_types):
+                writer.add_intra_relation(
+                    "全类型",
+                    source=files[i], target=files[(i + 1) % 10],
+                    relation_type=rt,
+                )
+
+        with MCPKReader(mcpk_path) as reader:
+            g = reader.find_group("全类型")
+            assert len(g.intra_relations) == 9
+            types_found = {ir.relation_type for ir in g.intra_relations}
+            for rt in all_types:
+                assert rt in types_found
+            print(f"  9 种 IntraRelationType 全部 roundtrip 正确 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_46_encryption_none_still_works(sizes: dict):
+    """不加密模式完全不受新代码影响。"""
+    label = "不加密兼容"
+    print("\n" + "=" * 60)
+    print(f"测试 46: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        txt = base / "plain.txt"
+        gen_text_file(txt, sizes["text"], seed=240)
+
+        mcpk_path = base / "plain.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            g = writer.create_group("G", tags=["plain"])
+            writer.add_file(txt, group=g)
+
+        with MCPKReader(mcpk_path) as reader:
+            assert not reader.is_encrypted
+            assert reader.encryption_params is None
+            g = reader.find_group("G")
+            assert g.tags == ["plain"]
+            data = reader.extract("plain.txt")
+            assert data == txt.read_bytes()
+            print(f"  未加密 + tags + roundtrip 正确 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_47_json_index_empty(sizes: dict):
+    """JSON 索引空文件 / 最小配置。"""
+    label = "JSON 索引最小"
+    print("\n" + "=" * 60)
+    print(f"测试 47: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        # 空索引
+        index_path = base / "empty_index.json"
+        with open(index_path, "w") as f:
+            json.dump({}, f)
+
+        mcpk_path = base / "empty_idx.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            result = writer.load_index(index_path)
+
+        assert result["loaded"] == 0
+        assert result["groups_created"] == 0
+        print(f"  空索引: 0 文件, 0 分组 ✓")
+
+        with MCPKReader(mcpk_path) as reader:
+            assert reader.entry_count == 0
+            print(f"  读取正常 ✓")
+
+        # 只有 standalone_files
+        index_path2 = base / "minimal.json"
+        txt = base / "solo.txt"
+        txt.write_text("solo", encoding="utf-8")
+        with open(index_path2, "w") as f:
+            json.dump({"standalone_files": ["solo.txt"]}, f)
+
+        mcpk_path2 = base / "minimal_idx.mcpk"
+        with MCPKWriter(mcpk_path2) as writer:
+            result = writer.load_index(index_path2, base_dir=base)
+
+        assert result["loaded"] == 1
+        with MCPKReader(mcpk_path2) as reader:
+            assert reader.entry_count == 1
+            assert reader.extract("solo.txt") == b"solo"
+            print(f"  最小索引: 1 standalone 文件 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_48_json_index_complex(sizes: dict):
+    """JSON 索引复杂场景：多组 + 多关系 + 多组内关系 + 标签 + 加密。"""
+    label = "JSON 索引复杂场景"
+    print("\n" + "=" * 60)
+    print(f"测试 48: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        project = base / "course"
+        project.mkdir()
+
+        # 创建课程文件
+        for i in range(1, 4):
+            gen_mp4_file(project / f"lec{i}.mp4", sizes["video"] // 3, seed=300 + i)
+            gen_srt_file(project / f"lec{i}.srt", 10 + i * 5, seed=400 + i)
+            gen_text_file(project / f"slides{i}.md", sizes["text"] // 2, seed=500 + i)
+
+        gen_text_file(project / "syllabus.md", sizes["text"], seed=600)
+
+        index = {
+            "name": "机器学习课程",
+            "description": "2026春季课程完整资料",
+            "groups": [
+                {
+                    "name": f"第{i}讲",
+                    "type": "COURSE",
+                    "tags": ["ML", f"week{i}"],
+                    "metadata": {"week": i, "instructor": "张教授"},
+                    "files": [
+                        f"lec{i}.mp4",
+                        f"lec{i}.srt",
+                        f"slides{i}.md",
+                    ],
+                }
+                for i in range(1, 4)
+            ],
+            "standalone_files": [
+                {"path": "syllabus.md", "tags": ["大纲"]},
+            ],
+            "relations": [
+                {"source": "第1讲", "target": "第2讲", "type": "SEQUEL"},
+                {"source": "第2讲", "target": "第3讲", "type": "SEQUEL"},
+                {"source": "第1讲", "target": "第3讲", "type": "RELATED",
+                 "desc": "首尾呼应"},
+            ],
+            "intra_relations": [
+                {
+                    "group": f"第{i}讲",
+                    "source": f"lec{i}.srt",
+                    "target": f"lec{i}.mp4",
+                    "type": "SUBTITLE_OF",
+                }
+                for i in range(1, 4)
+            ] + [
+                {
+                    "group": f"第{i}讲",
+                    "source": f"slides{i}.md",
+                    "target": f"lec{i}.mp4",
+                    "type": "ANNOTATION_OF",
+                    "desc": f"第{i}讲讲义",
+                }
+                for i in range(1, 4)
+            ],
+        }
+        index_path = base / "course_index.json"
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False, indent=2)
+
+        password = "course_secret"
+        mcpk_path = base / "course.mcpk"
+        writer = _try_aes_writer(mcpk_path, password=password, encryption="aes")
+        if writer is None:
+            print(f"  SKIP: cryptography 库未安装")
+            return True
+        with writer:
+            result = writer.load_index(index_path, base_dir=project)
+
+        assert result["loaded"] == 10  # 3*3 + 1
+        assert result["groups_created"] == 3
+        assert result["relations_created"] == 3
+        print(f"  加载: 10 文件, 3 分组, 3 组间关系 ✓")
+
+        with MCPKReader(mcpk_path, password=password) as reader:
+            assert reader.is_encrypted
+            assert len(reader.groups) == 3
+            assert len(reader.relations) == 3
+
+            for i in range(1, 4):
+                g = reader.find_group(f"第{i}讲")
+                assert g is not None
+                assert len(g.entry_ids) == 3
+                assert "ML" in g.tags
+                assert f"week{i}" in g.tags
+                assert len(g.intra_relations) == 2  # SUBTITLE_OF + ANNOTATION_OF
+
+            print(f"  各分组: 3 条目, 2 tags, 2 组内关系 ✓")
+
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 ✓")
+
+            # 提取验证
+            for e in reader.entries:
+                data = reader.extract(e.name)
+                assert len(data) == e.original_size
+            print(f"  全部 10 文件内容正确 ✓")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+# ═══════════════════════════════════════════════════════════
 #  主入口
 # ═══════════════════════════════════════════════════════════
 
@@ -1753,6 +3100,35 @@ QUICK_TESTS = [
     ("test_18",  test_18_no_encryption_compat,   "tiny"),
     ("test_19",  test_19_timestamps,             "tiny"),
     ("test_20",  test_20_encrypt_with_groups,    "tiny"),
+    # v2.2 新增
+    ("test_21",  test_21_aes_gcm_full_roundtrip, "tiny"),
+    ("test_22",  test_22_aes_gcm_metadata_only,  "tiny"),
+    ("test_23",  test_23_aes_gcm_data_only,      "tiny"),
+    ("test_24",  test_24_aes_gcm_wrong_password, "tiny"),
+    ("test_25",  test_25_aes_gcm_tamper_detection,"tiny"),
+    ("test_26",  test_26_xor_backward_compat,    "tiny"),
+    ("test_27",  test_27_aes_gcm_with_groups_and_relations, "tiny"),
+    ("test_28",  test_28_group_tags_basic,       "tiny"),
+    ("test_29",  test_29_add_tag_dynamic,        "tiny"),
+    ("test_30",  test_30_intra_relation_basic,   "tiny"),
+    ("test_31",  test_31_multiple_intra_relations,"tiny"),
+    ("test_32",  test_32_tags_and_intra_with_encryption, "tiny"),
+    ("test_33",  test_33_import_folder_basic,    "tiny"),
+    ("test_34",  test_34_import_folder_multiple, "tiny"),
+    ("test_35",  test_35_import_folder_non_recursive, "tiny"),
+    ("test_36",  test_36_json_index_basic,       "tiny"),
+    ("test_37",  test_37_json_index_missing_files,"tiny"),
+    ("test_38",  test_38_json_index_with_intra_relations, "tiny"),
+    ("test_39",  test_39_json_index_with_encryption, "tiny"),
+    ("test_40",  test_40_inspect_with_new_fields,"tiny"),
+    ("test_41",  test_41_tag_deduplication,      "tiny"),
+    ("test_42",  test_42_many_tags_per_group,    "tiny"),
+    ("test_43",  test_43_intra_relation_custom_type, "tiny"),
+    ("test_44",  test_44_import_folder_with_tags_and_relations, "tiny"),
+    ("test_45",  test_45_all_intra_relation_types, "tiny"),
+    ("test_46",  test_46_encryption_none_still_works, "tiny"),
+    ("test_47",  test_47_json_index_empty,       "tiny"),
+    ("test_48",  test_48_json_index_complex,     "tiny"),
 ]
 
 FULL_TESTS = [
@@ -1776,6 +3152,35 @@ FULL_TESTS = [
     ("test_18",  test_18_no_encryption_compat,   "tiny"),
     ("test_19",  test_19_timestamps,             "tiny"),
     ("test_20",  test_20_encrypt_with_groups,    "small"),
+    # v2.2 新增
+    ("test_21",  test_21_aes_gcm_full_roundtrip, "small"),
+    ("test_22",  test_22_aes_gcm_metadata_only,  "small"),
+    ("test_23",  test_23_aes_gcm_data_only,      "small"),
+    ("test_24",  test_24_aes_gcm_wrong_password, "tiny"),
+    ("test_25",  test_25_aes_gcm_tamper_detection,"tiny"),
+    ("test_26",  test_26_xor_backward_compat,    "small"),
+    ("test_27",  test_27_aes_gcm_with_groups_and_relations, "small"),
+    ("test_28",  test_28_group_tags_basic,       "tiny"),
+    ("test_29",  test_29_add_tag_dynamic,        "tiny"),
+    ("test_30",  test_30_intra_relation_basic,   "tiny"),
+    ("test_31",  test_31_multiple_intra_relations,"tiny"),
+    ("test_32",  test_32_tags_and_intra_with_encryption, "tiny"),
+    ("test_33",  test_33_import_folder_basic,    "tiny"),
+    ("test_34",  test_34_import_folder_multiple, "tiny"),
+    ("test_35",  test_35_import_folder_non_recursive, "tiny"),
+    ("test_36",  test_36_json_index_basic,       "small"),
+    ("test_37",  test_37_json_index_missing_files,"tiny"),
+    ("test_38",  test_38_json_index_with_intra_relations, "tiny"),
+    ("test_39",  test_39_json_index_with_encryption, "tiny"),
+    ("test_40",  test_40_inspect_with_new_fields,"tiny"),
+    ("test_41",  test_41_tag_deduplication,      "tiny"),
+    ("test_42",  test_42_many_tags_per_group,    "tiny"),
+    ("test_43",  test_43_intra_relation_custom_type, "tiny"),
+    ("test_44",  test_44_import_folder_with_tags_and_relations, "tiny"),
+    ("test_45",  test_45_all_intra_relation_types, "tiny"),
+    ("test_46",  test_46_encryption_none_still_works, "tiny"),
+    ("test_47",  test_47_json_index_empty,       "tiny"),
+    ("test_48",  test_48_json_index_complex,     "small"),
 ]
 
 LARGE_TESTS = [
@@ -1789,12 +3194,15 @@ LARGE_TESTS = [
     ("test_16",  test_16_encrypt_full_roundtrip, "medium"),
     ("test_19",  test_19_timestamps,             "medium"),
     ("test_20",  test_20_encrypt_with_groups,    "medium"),
+    ("test_21",  test_21_aes_gcm_full_roundtrip, "medium"),
+    ("test_27",  test_27_aes_gcm_with_groups_and_relations, "medium"),
+    ("test_48",  test_48_json_index_complex,     "medium"),
 ]
 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="MCPK v2 集成测试")
+    parser = argparse.ArgumentParser(description="MCPK v2.2 集成测试")
     parser.add_argument("--quick", action="store_true", help="快速模式 (tiny 文件)")
     parser.add_argument("--large-only", action="store_true", help="仅大文件测试")
     parser.add_argument("--size", choices=list(SIZE_PRESETS.keys()),
@@ -1820,7 +3228,7 @@ def main():
 
     mode = "LARGE" if args.large_only else ("QUICK" if args.quick else "FULL")
     size_label = args.size or "auto"
-    print(f"MCPK v2 测试套件  [模式={mode}, 预设={size_label}]")
+    print(f"MCPK v2.2 测试套件  [模式={mode}, 预设={size_label}]")
     print(f"测试数量: {len(test_plan)}")
     print()
 
