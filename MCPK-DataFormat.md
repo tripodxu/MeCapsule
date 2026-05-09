@@ -503,6 +503,7 @@ stored_size = 16 + 12 + len(ciphertext) + 16
 | application/vnd.openxmlformats-officedocument.wordprocessingml.document | .docx | 无 |
 | text/html | .html | zlib |
 | text/csv | .csv | zlib |
+| application/typescript | .mts | zlib |
 
 ### 12.2 图片
 

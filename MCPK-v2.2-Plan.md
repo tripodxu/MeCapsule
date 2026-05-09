@@ -1,6 +1,6 @@
 # MCPK v2.2 实施计划
 
-**状态：已完成** — 所有 Phase 均已实现，49 个测试全部通过。本文档保留作为实施记录。
+**状态：已完成** — 所有 Phase 均已实现，60 个测试全部通过。本文档保留作为实施记录。
 
 **基于用户确认：AES-GCM 用 cryptography 库 / 缺失文件跳过警告 / 组内关系新增专用类型**
 
@@ -362,6 +362,17 @@ python -m mcpk pack --index index.json --base-dir ./project/ -o output.mcpk [--p
 | test_36~39 | JSON 索引打包变体 | Phase 4 |
 | test_40~48 | inspect/tag/枚举/兼容性 | 综合 |
 | test_49 | 同名文件区分 | group + index |
+| test_50 | 路径安全 | 拒绝 ../、绝对路径 |
+| test_51 | Reader API 覆盖 | list_entries/list_group_entries/get_metadata |
+| test_52 | Writer 属性和关系 | entries/groups/add_relation/add_tag |
+| test_53 | 错误处理 | 无效文件/截断/无密码/错误密码 |
+| test_54 | Unicode 文件名 | 中文/日文/法文/俄文 |
+| test_55 | 深层目录嵌套 | import_folder 递归 |
+| test_56 | 压缩回退 | zstd/lz4 回退 zlib |
+| test_57 | 加密边界 | 空文件/单字节加密 |
+| test_58 | 大量分组压力 | 50 组 × 5 文件 |
+| test_59 | crypto 模块测试 | xor_bytes/key derivation/AES-GCM |
+| test_60 | 数据篡改检测 | blob 篡改 CRC32 失败 |
 
 ---
 
@@ -369,13 +380,14 @@ python -m mcpk pack --index index.json --base-dir ./project/ -o output.mcpk [--p
 
 | 文件 | 变更类型 | 说明 |
 |------|----------|------|
-| `mcpk/constants.py` | 修改 | 新增 KdfType.PBKDF2_AES、IntraRelationType 枚举、ENCRYPTION_PARAMS_FMT_V2 |
+| `mcpk/constants.py` | 修改 | 新增 KdfType.PBKDF2_AES、IntraRelationType 枚举、EP 格式、enum_name/make_name_map/encrypts_control/encrypts_data |
+| `mcpk/crypto.py` | 新增 | 从 writer.py 提取的共享加密/压缩工具（xor_bytes、密钥派生、AES-GCM、compress/decompress） |
 | `mcpk/types.py` | 修改 | GroupEntry 增加 tags/intra_relations，新增 IntraRelation 类，EncryptionParams 扩展 |
-| `mcpk/writer.py` | 修改 | AES-GCM 加密流程、import_folder()、load_index()、add_tag()、add_intra_relation() |
-| `mcpk/reader.py` | 修改 | AES-GCM 解密流程、解析 tags/intra_relations |
+| `mcpk/writer.py` | 修改 | import_folder()、load_index()、add_tag()、add_intra_relation()，加密/压缩提取至 crypto.py |
+| `mcpk/reader.py` | 修改 | 解密/解压提取至 crypto.py，解析 tags/intra_relations |
 | `mcpk/cli.py` | 修改 | --encryption/--auto-group/--index 参数，groups 命令展示 tags |
 | `MCPK-v2.2-Design.md` | 新增 | v2.2 完整设计文档 |
-| `test_mcpk.py` | 修改 | 新增 test_21 ~ test_32 |
+| `test_mcpk.py` | 修改 | 新增 test_21 ~ test_60（40 个测试） |
 
 ---
 

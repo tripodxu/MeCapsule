@@ -909,7 +909,7 @@ me.magic_bytes          # bytes: 文件签名 (最多 32 字节)
 | 文档 | .md .txt .json .csv .html .xml .yaml .toml .ini .cfg .log | DOCUMENT | zlib |
 | 文档 | .pdf .docx .doc .xlsx .pptx | DOCUMENT | 无 |
 | 字幕 | .srt .vtt .ass | DOCUMENT | zlib |
-| 代码 | .py .js .ts .jsx .tsx .java .c .cpp .h .hpp .go .rs .rb .php .swift .kt .sh .bash .bat .ps1 .css .scss .sql .r .lua | DOCUMENT | zlib |
+| 代码 | .py .js .mts .jsx .tsx .java .c .cpp .h .hpp .go .rs .rb .php .swift .kt .sh .bash .bat .ps1 .css .scss .sql .r .lua | DOCUMENT | zlib |
 | 图片 | .jpg .png .gif .webp .svg .ico | IMAGE | 无 |
 | 图片 | .bmp .tiff | IMAGE | zlib |
 | 音频 | .mp3 .ogg .flac .aac .m4a .wma | AUDIO | 无 |
@@ -1075,10 +1075,11 @@ mcpk/
 ├── __main__.py      # python -m mcpk
 ├── constants.py     # 常量、枚举、扩展名映射、magic 码表
 ├── types.py         # FileHeader / TocEntry / GroupEntry / IntraRelation / ...
-├── writer.py        # MCPKWriter（写入 + 加密 + import_folder + load_index）
-├── reader.py        # MCPKReader（读取 + 解密 + 查找/提取）
+├── crypto.py        # 共享加密/压缩工具（XOR/AES-GCM/压缩/解压）
+├── writer.py        # MCPKWriter（写入 + import_folder + load_index）
+├── reader.py        # MCPKReader（读取 + 查找/提取）
 └── cli.py           # 命令行工具
-test_mcpk.py         # 49 个集成测试
+test_mcpk.py         # 60 个集成测试
 MCPK-DataFormat.md   # 二进制格式规范
 MCPK-v2-Design.md    # v2 设计方案
 MCPK-v2.2-Design.md  # v2.2 增强设计
@@ -1096,7 +1097,7 @@ python test_mcpk.py --test test_21  # 单个测试
 python test_mcpk.py --size small    # 指定大小预设
 ```
 
-测试覆盖：基本 Roundtrip、分组存储、Magic Index、压缩比、大批量条目、v1 兼容、XOR/AES-GCM 加密三种模式、分组标签、组内关系、import_folder、JSON 索引打包、时间戳验证等 49 个用例。
+测试覆盖：基本 Roundtrip、分组存储、Magic Index、压缩比、大批量条目、v1 兼容、XOR/AES-GCM 加密三种模式、分组标签、组内关系、import_folder、JSON 索引打包、时间戳验证、路径安全、Reader API、错误处理、Unicode 文件名、压缩回退、数据篡改检测等 60 个用例。
 
 ## 性能参考
 

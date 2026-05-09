@@ -307,13 +307,14 @@ python -m mcpk pack --index index.json --base-dir ./project/ -o output.mcpk [--p
 
 | 文件 | 变更说明 |
 |------|----------|
-| `mcpk/__init__.py` | 版本 2.2.0，导出 `IntraRelationType`、`IntraRelation` |
-| `mcpk/constants.py` | 新增 `KdfType.PBKDF2_AES`、`IntraRelationType`、AES-GCM 常量、EP 格式 |
+| `mcpk/__init__.py` | 版本 2.2.0，导出 `IntraRelationType`、`IntraRelation`、`xor_bytes`（从 crypto 模块） |
+| `mcpk/constants.py` | 新增 `KdfType.PBKDF2_AES`、`IntraRelationType`、AES-GCM 常量、EP 格式、`enum_name`/`make_name_map`/`encrypts_control`/`encrypts_data` 工具函数 |
+| `mcpk/crypto.py` | 新增：从 writer.py 提取的共享加密/压缩工具（`xor_bytes`、密钥派生、AES-GCM、`compress`/`decompress`） |
 | `mcpk/types.py` | `EncryptionParams` 扩展、`GroupEntry` 增加 tags/intra_relations、新增 `IntraRelation` |
-| `mcpk/writer.py` | AES-GCM 加密、`import_folder()`、`load_index()`、`add_tag()`、`add_intra_relation()` |
-| `mcpk/reader.py` | AES-GCM 解密、tags/intra_relations 解析、`InvalidTag` 包装 |
+| `mcpk/writer.py` | `import_folder()`、`load_index()`、`add_tag()`、`add_intra_relation()`，加密/压缩逻辑提取至 crypto.py |
+| `mcpk/reader.py` | AES-GCM 解密、tags/intra_relations 解析、`InvalidTag` 包装，解密/解压逻辑提取至 crypto.py |
 | `mcpk/cli.py` | `--encryption`、`--auto-group`、`--index`/`--base-dir` 参数 |
-| `test_mcpk.py` | 新增 test_21 ~ test_49（30 个测试） |
+| `test_mcpk.py` | 新增 test_21 ~ test_60（40 个测试） |
 
 ---
 
@@ -350,5 +351,16 @@ python -m mcpk pack --index index.json --base-dir ./project/ -o output.mcpk [--p
 | test_47 | JSON 索引空/最小 | 边界情况 |
 | test_48 | JSON 索引复杂场景 | 全特性综合 |
 | test_49 | 同名文件区分 | group + index 参数 |
+| test_50 | 路径安全 | 拒绝 ../、绝对路径 |
+| test_51 | Reader API 覆盖 | list_entries/list_group_entries/get_metadata/extract_entry |
+| test_52 | Writer 属性和关系 | entries/groups/is_encrypted/add_relation/add_tag |
+| test_53 | 错误处理 | 无效文件/截断/无密码/错误密码 |
+| test_54 | Unicode 文件名 | 中文/日文/法文/俄文 |
+| test_55 | 深层目录嵌套 | import_folder 递归 |
+| test_56 | 压缩回退 | zstd/lz4 回退 zlib + 警告 |
+| test_57 | 加密边界 | 空文件/单字节加密 roundtrip |
+| test_58 | 大量分组压力 | 50 组 × 5 文件 |
+| test_59 | crypto 模块直接测试 | xor_bytes/key derivation/AES-GCM |
+| test_60 | 数据篡改检测 | blob 篡改后 CRC32/解压失败 |
 
-共计 **49 个测试用例**（原有 20 + 新增 29）。
+共计 **60 个测试用例**（原有 20 + 新增 40）。
