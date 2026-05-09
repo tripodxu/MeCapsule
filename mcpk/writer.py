@@ -62,7 +62,39 @@ def xor_bytes(data: bytes, key: bytes) -> bytes:
     if not key:
         return data
     key_len = len(key)
-    return bytes(b ^ key[i % key_len] for i, b in enumerate(data))
+    result = bytearray(data)
+    for i in range(len(result)):
+        result[i] ^= key[i % key_len]
+    return bytes(result)
+
+
+# ── 可选压缩模块缓存 ──────────────────────────────────────
+_zstd_mod = None
+_lz4_mod = None
+_zstd_checked = False
+_lz4_checked = False
+
+def _get_zstd():
+    global _zstd_mod, _zstd_checked
+    if not _zstd_checked:
+        _zstd_checked = True
+        try:
+            import zstd as _m
+            _zstd_mod = _m
+        except ImportError:
+            pass
+    return _zstd_mod
+
+def _get_lz4():
+    global _lz4_mod, _lz4_checked
+    if not _lz4_checked:
+        _lz4_checked = True
+        try:
+            import lz4.frame as _m
+            _lz4_mod = _m
+        except ImportError:
+            pass
+    return _lz4_mod
 
 
 # ── XOR 模式密钥派生（v2.1 兼容）────────────────────────
@@ -831,17 +863,15 @@ class MCPKWriter:
         elif compression == Compression.ZLIB:
             return zlib.compress(data, level=6)
         elif compression == Compression.ZSTD:
-            try:
-                import zstd
-                return zstd.compress(data, 3)
-            except ImportError:
-                return zlib.compress(data, level=6)
+            m = _get_zstd()
+            if m is not None:
+                return m.compress(data, 3)
+            return zlib.compress(data, level=6)
         elif compression == Compression.LZ4:
-            try:
-                import lz4.frame
-                return lz4.frame.compress(data)
-            except ImportError:
-                return zlib.compress(data, level=6)
+            m = _get_lz4()
+            if m is not None:
+                return m.compress(data)
+            return zlib.compress(data, level=6)
         else:
             raise ValueError(f"未知压缩算法: {compression}")
 
@@ -881,7 +911,9 @@ class MCPKWriter:
         )
         parts.append(header)
         for i, entry in enumerate(self._entries):
-            ext = Path(entry.name).suffix.lower()
+            # 用字符串操作替代 Path() 构造
+            dot = entry.name.rfind(".")
+            ext = entry.name[dot:].lower() if dot >= 0 else ""
             magic_bytes = FILE_MAGICS.get(ext, b"")
             if len(magic_bytes) > 32:
                 magic_bytes = magic_bytes[:32]

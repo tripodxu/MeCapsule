@@ -40,7 +40,7 @@ from .types import (
 from .writer import (
     xor_bytes, _derive_key, _derive_control_key, _derive_blob_key,
     _derive_key_pbkdf2, _derive_subkeys_aes, _derive_blob_key_aes,
-    aes_gcm_decrypt, HAS_CRYPTO,
+    aes_gcm_decrypt, HAS_CRYPTO, _get_zstd, _get_lz4,
 )
 
 
@@ -73,6 +73,7 @@ class MCPKReader:
         self._entries: list[TocEntry] = []
         self._magic_entries: list[MagicEntry] = []
         self._groups: list[GroupEntry] = []
+        self._group_by_name: dict[str, GroupEntry] = {}
         self._relations: list[GroupRelation] = []
         self._loaded = False
         self._version: int = 1
@@ -166,22 +167,21 @@ class MCPKReader:
 
     def find_all(self, name: str, *, group: Optional[Union[str, int]] = None) -> list[TocEntry]:
         """返回所有同名条目。可按分组过滤。"""
-        entries = self._entries
+        gid = None
         if group is not None:
             if isinstance(group, int):
-                entries = [e for e in entries if e.group_id == group]
+                gid = group
             else:
                 g = self.find_group(group)
                 if g is None:
-                    return []  # 分组不存在，直接返回空
-                entries = [e for e in entries if e.group_id == g.group_id]
-        return [e for e in entries if e.name == name]
+                    return []
+                gid = g.group_id
+        if gid is not None:
+            return [e for e in self._entries if e.name == name and e.group_id == gid]
+        return [e for e in self._entries if e.name == name]
 
     def find_group(self, name: str) -> Optional[GroupEntry]:
-        for group in self._groups:
-            if group.name == name:
-                return group
-        return None
+        return self._group_by_name.get(name)
 
     def list_group_entries(self, group_name: str) -> list[TocEntry]:
         group = self.find_group(group_name)
@@ -455,6 +455,8 @@ class MCPKReader:
             self._load_v2(header_data)
         else:
             raise MCPKError(f"不支持的版本 {version}")
+        # 构建快速查找索引
+        self._group_by_name = {g.name: g for g in self._groups}
         self._loaded = True
 
     def _load_v1(self, header_data: bytes):
@@ -777,16 +779,14 @@ class MCPKReader:
         elif compression == Compression.ZLIB:
             return zlib.decompress(data)
         elif compression == Compression.ZSTD:
-            try:
-                import zstd
-                return zstd.decompress(data)
-            except ImportError:
-                raise MCPKError("数据使用 zstd 压缩，请安装 zstd: pip install zstd")
+            m = _get_zstd()
+            if m is not None:
+                return m.decompress(data)
+            raise MCPKError("数据使用 zstd 压缩，请安装 zstd: pip install zstd")
         elif compression == Compression.LZ4:
-            try:
-                import lz4.frame
-                return lz4.frame.decompress(data)
-            except ImportError:
-                raise MCPKError("数据使用 lz4 压缩，请安装 lz4: pip install lz4")
+            m = _get_lz4()
+            if m is not None:
+                return m.decompress(data)
+            raise MCPKError("数据使用 lz4 压缩，请安装 lz4: pip install lz4")
         else:
             raise MCPKError(f"未知压缩算法: {compression}")
