@@ -46,6 +46,15 @@ FOOTER_SIZE_CALC = struct.calcsize(FOOTER_FMT)  # 16
 TOC_ENTRY_FIXED_FMT = "<BB2sI Q Q Q Q Q H"
 TOC_ENTRY_FIXED_SIZE = struct.calcsize(TOC_ENTRY_FIXED_FMT)  # 50
 
+# v1 TOC Entry 固定部分 (42 字节): 无 modified_at
+TOC_ENTRY_FIXED_FMT_V1 = "<BB2sI Q Q Q Q H"
+TOC_ENTRY_FIXED_SIZE_V1 = struct.calcsize(TOC_ENTRY_FIXED_FMT_V1)  # 42
+
+# Group Index 子结构大小
+GROUP_ENTRY_HEADER_SIZE = struct.calcsize("<BBH H")  # 6
+GROUP_RELATION_HEADER_SIZE = struct.calcsize("<BBH H")  # 6
+INTRA_RELATION_HEADER_SIZE = struct.calcsize("<II H H")  # 12
+
 # Encryption Params 区 — 旧版 56 字节 (kdf_type=0x01):
 #   params_magic(4s) + kdf_type(B) + encrypt_mode(B) + reserved(2s)
 #   + salt(16s) + control_key_hash(32s)
@@ -173,7 +182,7 @@ EXTENSION_MAP = {
     # 代码
     ".py":   (EntryType.DOCUMENT, "text/x-python",       Compression.ZLIB),
     ".js":   (EntryType.DOCUMENT, "application/javascript", Compression.ZLIB),
-    ".ts":   (EntryType.DOCUMENT, "application/typescript", Compression.ZLIB),
+    ".mts":  (EntryType.DOCUMENT, "application/typescript", Compression.ZLIB),
     ".jsx":  (EntryType.DOCUMENT, "text/x-jsx",          Compression.ZLIB),
     ".tsx":  (EntryType.DOCUMENT, "text/x-tsx",          Compression.ZLIB),
     ".java": (EntryType.DOCUMENT, "text/x-java-source",  Compression.ZLIB),
@@ -262,3 +271,30 @@ FILE_MAGICS = {
 # ── 全局标志位 ──────────────────────────────────────────────
 FLAG_ENCRYPTED = 0x01
 FLAG_SIGNED    = 0x02
+
+
+# ── 工具函数 ───────────────────────────────────────────────
+
+def enum_name(enum_cls, value: int) -> str:
+    """安全获取枚举名称，未知值返回十六进制字符串。"""
+    try:
+        return enum_cls(value).name
+    except ValueError:
+        return f"0x{value:02x}"
+
+
+def make_name_map(enum_cls) -> dict[str, int]:
+    """创建小写名称到枚举值的映射字典。"""
+    return {name.lower(): val for name, val in enum_cls.__members__.items()}
+
+
+# ── 加密模式谓词 ───────────────────────────────────────────
+
+def encrypts_control(mode: int) -> bool:
+    """加密模式是否加密控制区（MI/GI/TOC）。"""
+    return mode in (EncryptionMode.FULL, EncryptionMode.METADATA_ONLY)
+
+
+def encrypts_data(mode: int) -> bool:
+    """加密模式是否加密数据区（blobs）。"""
+    return mode in (EncryptionMode.FULL, EncryptionMode.DATA_ONLY)

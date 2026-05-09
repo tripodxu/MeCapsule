@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .writer import MCPKWriter
 from .reader import MCPKReader, MCPKError
-from .constants import EntryType, GroupType, RelationType, IntraRelationType
+from .constants import EntryType, RelationType, IntraRelationType
 
 
 def cmd_pack(args):

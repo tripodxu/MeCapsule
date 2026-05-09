@@ -21,15 +21,13 @@ import os
 import struct
 import time
 import warnings
-import zlib
 from pathlib import Path
 from typing import Optional, Union
 
 from .constants import (
-    MAGIC, VERSION, HEADER_SIZE, FOOTER_SIZE, MAGIC_ENTRY_SIZE,
+    MAGIC, VERSION, HEADER_SIZE,
     MAGIC_INDEX_MAGIC, GROUP_INDEX_MAGIC, ENCRYPTION_PARAMS_MAGIC,
-    NO_GROUP, ENCRYPTION_PARAMS_SIZE_LEGACY, ENCRYPTION_PARAMS_SIZE_V2,
-    ENCRYPTION_PARAMS_SIZE, AES_GCM_NONCE_SIZE, AES_GCM_TAG_SIZE,
+    NO_GROUP, ENCRYPTION_PARAMS_SIZE,
     PBKDF2_DEFAULT_ITERATIONS,
     HEADER_FMT, FOOTER_FMT, TOC_ENTRY_FIXED_FMT,
     MAGIC_INDEX_HEADER_FMT, MAGIC_INDEX_HEADER_SIZE,
@@ -38,140 +36,16 @@ from .constants import (
     EntryType, Compression, GroupType, RelationType, IntraRelationType,
     EncryptionMode, KdfType, FLAG_ENCRYPTED,
     EXTENSION_MAP, FILE_MAGICS,
+    encrypts_control, encrypts_data, make_name_map,
 )
 from .types import (
-    FileHeader, TocEntry, MagicEntry, GroupEntry, GroupRelation,
-    IntraRelation, EncryptionParams,
+    TocEntry, GroupEntry, GroupRelation, IntraRelation,
 )
-
-# ── 可选依赖：cryptography（AES-GCM）──────────────────────
-try:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-    from cryptography.hazmat.primitives import hashes
-    HAS_CRYPTO = True
-except ImportError:
-    HAS_CRYPTO = False
-
-
-# ── 加密工具函数 ────────────────────────────────────────────
-
-def xor_bytes(data: bytes, key: bytes) -> bytes:
-    """XOR 流加密/解密（与 1apluse xor_bytes 一致）。"""
-    if not key:
-        return data
-    key_len = len(key)
-    result = bytearray(data)
-    for i in range(len(result)):
-        result[i] ^= key[i % key_len]
-    return bytes(result)
-
-
-# ── 可选压缩模块缓存 ──────────────────────────────────────
-_zstd_mod = None
-_lz4_mod = None
-_zstd_checked = False
-_lz4_checked = False
-
-def _get_zstd():
-    global _zstd_mod, _zstd_checked
-    if not _zstd_checked:
-        _zstd_checked = True
-        try:
-            import zstd as _m
-            _zstd_mod = _m
-        except ImportError:
-            pass
-    return _zstd_mod
-
-def _get_lz4():
-    global _lz4_mod, _lz4_checked
-    if not _lz4_checked:
-        _lz4_checked = True
-        try:
-            import lz4.frame as _m
-            _lz4_mod = _m
-        except ImportError:
-            pass
-    return _lz4_mod
-
-
-# ── XOR 模式密钥派生（v2.1 兼容）────────────────────────
-
-def _derive_key(password: str, salt: bytes) -> bytes:
-    """从密码 + salt 派生 32 字节主密钥（XOR 模式）。"""
-    pwd_bytes = password.encode("utf-8")
-    seed = bytes(
-        pwd_bytes[i % len(pwd_bytes)] ^ salt[i % len(salt)]
-        for i in range(32)
-    )
-    return hashlib.sha256(seed + salt).digest()
-
-
-def _derive_control_key(master_key: bytes) -> bytes:
-    """派生控制区加密密钥（XOR 模式）。"""
-    return hashlib.sha256(master_key + b"ctrl").digest()
-
-
-def _derive_blob_key(master_key: bytes, entry_id: int, entry_salt: bytes) -> bytes:
-    """派生单条目 blob 加密密钥（XOR 模式）。"""
-    id_bytes = struct.pack("<I", entry_id)
-    return hashlib.sha256(master_key + id_bytes + entry_salt).digest()
-
-
-# ── AES-GCM 模式密钥派生（v2.2）──────────────────────────
-
-def _derive_key_pbkdf2(password: str, salt: bytes,
-                        iterations: int = PBKDF2_DEFAULT_ITERATIONS) -> bytes:
-    """PBKDF2-SHA256 派生 256-bit 主密钥。"""
-    if not HAS_CRYPTO:
-        raise ImportError("AES-GCM 加密需要 cryptography 库: pip install cryptography")
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=iterations,
-    )
-    return kdf.derive(password.encode("utf-8"))
-
-
-def _derive_subkeys_aes(master_key: bytes) -> tuple[bytes, bytes]:
-    """从主密钥派生控制区密钥和数据区密钥基（HKDF-SHA256）。"""
-    control_key = HKDF(
-        algorithm=hashes.SHA256(), length=32,
-        salt=None, info=b"mcpk-ctrl",
-    ).derive(master_key)
-    data_key_base = HKDF(
-        algorithm=hashes.SHA256(), length=32,
-        salt=None, info=b"mcpk-data",
-    ).derive(master_key)
-    return control_key, data_key_base
-
-
-def _derive_blob_key_aes(master_key: bytes, entry_id: int, entry_salt: bytes) -> bytes:
-    """派生单条目 blob 加密密钥（AES 模式，HKDF）。"""
-    id_bytes = struct.pack("<I", entry_id)
-    return HKDF(
-        algorithm=hashes.SHA256(), length=32,
-        salt=entry_salt, info=b"mcpk-blob" + id_bytes,
-    ).derive(master_key)
-
-
-def aes_gcm_encrypt(key: bytes, plaintext: bytes, aad: bytes = b"") -> bytes:
-    """AES-256-GCM 加密。返回 nonce(12B) + ciphertext + tag(16B)。"""
-    nonce = os.urandom(AES_GCM_NONCE_SIZE)
-    aesgcm = AESGCM(key)
-    ct = aesgcm.encrypt(nonce, plaintext, aad)
-    return nonce + ct
-
-
-def aes_gcm_decrypt(key: bytes, data: bytes, aad: bytes = b"") -> bytes:
-    """AES-256-GCM 解密。输入 nonce(12B) + ciphertext + tag(16B)。"""
-    nonce = data[:AES_GCM_NONCE_SIZE]
-    ct = data[AES_GCM_NONCE_SIZE:]
-    aesgcm = AESGCM(key)
-    return aesgcm.decrypt(nonce, ct, aad)
+from .crypto import (
+    xor_bytes, derive_key, derive_control_key, derive_blob_key,
+    derive_key_pbkdf2, derive_subkeys_aes, derive_blob_key_aes,
+    aes_gcm_encrypt, aes_gcm_decrypt, HAS_CRYPTO, compress,
+)
 
 
 # ── Writer ──────────────────────────────────────────────────
@@ -221,6 +95,7 @@ class MCPKWriter:
 
         # 分组管理
         self._groups: dict[str, GroupEntry] = {}
+        self._gid_to_group: dict[int, GroupEntry] = {}
         self._group_id_counter: int = 0
         self._relations: list[GroupRelation] = []
 
@@ -259,10 +134,10 @@ class MCPKWriter:
                         self._kdf_type = KdfType.PBKDF2_AES
                         self._kdf_iterations = PBKDF2_DEFAULT_ITERATIONS
                         self._salt = os.urandom(32)
-                        self._master_key = _derive_key_pbkdf2(
+                        self._master_key = derive_key_pbkdf2(
                             password, self._salt, self._kdf_iterations
                         )
-                        self._control_key, self._data_key_base = _derive_subkeys_aes(
+                        self._control_key, self._data_key_base = derive_subkeys_aes(
                             self._master_key
                         )
                     else:
@@ -276,8 +151,8 @@ class MCPKWriter:
                     self._kdf_type = KdfType.SHA256_XOR
                     self._kdf_iterations = 0
                     self._salt = os.urandom(16)
-                    self._master_key = _derive_key(password, self._salt)
-                    self._control_key = _derive_control_key(self._master_key)
+                    self._master_key = derive_key(password, self._salt)
+                    self._control_key = derive_control_key(self._master_key)
 
     def __enter__(self):
         self._file = open(self.output_path, "wb")
@@ -285,8 +160,12 @@ class MCPKWriter:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if not self._closed:
-            self.finalize()
+        try:
+            if not self._closed:
+                self.finalize()
+        finally:
+            if self._file and not self._file.closed:
+                self._file.close()
 
     # ── 分组 API ────────────────────────────────────────────
 
@@ -308,6 +187,7 @@ class MCPKWriter:
             tags=list(tags) if tags else [],
         )
         self._groups[name] = group
+        self._gid_to_group[group_id] = group
         return group
 
     def add_relation(
@@ -392,8 +272,6 @@ class MCPKWriter:
             compression = inferred[2] if inferred else Compression.ZLIB
 
         name = arcname or file_path.name
-        if ".." in name or name.startswith("/") or name.startswith("\\"):
-            raise ValueError(f"不安全的文件名: {name}")
 
         # 读取源文件时间戳
         stat = file_path.stat()
@@ -421,8 +299,6 @@ class MCPKWriter:
         group: Optional[Union[GroupEntry, str]] = None,
         group_name: Optional[str] = None,
     ) -> TocEntry:
-        if ".." in name or name.startswith("/") or name.startswith("\\"):
-            raise ValueError(f"不安全的文件名: {name}")
         return self._add_entry(
             data, name, entry_type, mime_type, compression,
             metadata=metadata, created_at=created_at, modified_at=modified_at,
@@ -564,12 +440,9 @@ class MCPKWriter:
             "relations_created": 0,
         }
 
-        # GroupType 名称映射
-        gt_map = {name.lower(): val for name, val in GroupType.__members__.items()}
-        # RelationType 名称映射
-        rt_map = {name.lower(): val for name, val in RelationType.__members__.items()}
-        # IntraRelationType 名称映射
-        irt_map = {name.lower(): val for name, val in IntraRelationType.__members__.items()}
+        gt_map = make_name_map(GroupType)
+        rt_map = make_name_map(RelationType)
+        irt_map = make_name_map(IntraRelationType)
 
         # ── 处理 groups ──
         for gspec in index.get("groups", []):
@@ -691,14 +564,11 @@ class MCPKWriter:
             return
         self._closed = True
 
-        if not self._entries:
-            self._write_empty_file()
-            return
-
         packed_at = int(time.time() * 1000)
         cursor = HEADER_SIZE
+        has_entries = bool(self._entries)
 
-        # ── Step 0: 写入 Encryption Params (如果加密) ──
+        # ── Encryption Params ──
         ep_offset = 0
         ep_size = 0
         if self._encrypted:
@@ -708,66 +578,55 @@ class MCPKWriter:
             self._file.write(ep_bytes)
             cursor += ep_size
 
-        # ── Step 1: 写入 Magic Index ──
-        magic_index_offset = cursor
-        mi_bytes = self._build_magic_index()
-        if self._encrypted and self._encrypt_mode in (
-            EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
-        ):
+        # ── Magic Index ──
+        mi_bytes = self._build_magic_index() if has_entries else struct.pack(
+            MAGIC_INDEX_HEADER_FMT, MAGIC_INDEX_MAGIC, 0, MAGIC_INDEX_HEADER_SIZE,
+        )
+        if self._encrypted and encrypts_control(self._encrypt_mode):
             mi_bytes = self._encrypt_control(mi_bytes)
-        mi_encrypted_size = len(mi_bytes)  # 存入 header，供 reader 定位 MI
+        mi_encrypted_size = len(mi_bytes)
         self._file.write(mi_bytes)
         cursor += len(mi_bytes)
 
-        # ── Step 2: 按分组顺序写入 Blob ──
-        indexed = list(enumerate(self._entries))
-        def sort_key(item):
-            idx, e = item
-            return (0 if e.group_id != NO_GROUP else 1, e.group_id, idx)
-        sorted_entries = sorted(indexed, key=sort_key)
+        # ── Blobs (按分组顺序) ──
+        if has_entries:
+            encrypt_blobs = self._encrypted and encrypts_data(self._encrypt_mode)
+            indexed = list(enumerate(self._entries))
+            sorted_entries = sorted(indexed, key=lambda x: (0 if x[1].group_id != NO_GROUP else 1, x[1].group_id, x[0]))
+            for original_idx, entry in sorted_entries:
+                entry.blob_offset = cursor
+                blob = self._blobs[original_idx]
+                if encrypt_blobs:
+                    blob = self._encrypt_blob(blob, original_idx)
+                    entry.stored_size = len(blob)
+                self._file.write(blob)
+                cursor += len(blob)
 
-        encrypt_blobs = self._encrypted and self._encrypt_mode in (
-            EncryptionMode.FULL, EncryptionMode.DATA_ONLY
-        )
-        for original_idx, entry in sorted_entries:
-            entry.blob_offset = cursor
-            blob = self._blobs[original_idx]
-            if encrypt_blobs:
-                blob = self._encrypt_blob(blob, original_idx)
-                entry.stored_size = len(blob)
-            self._file.write(blob)
-            cursor += len(blob)
-
-        # ── Step 3: 写入 Group Index ──
+        # ── Group Index ──
         group_index_offset = cursor
-        gi_bytes = self._build_group_index()
-        gi_original_size = len(gi_bytes)  # 保存原始大小
-        if self._encrypted and self._encrypt_mode in (
-            EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
-        ):
+        gi_bytes = self._build_group_index() if has_entries else struct.pack(
+            GROUP_INDEX_HEADER_FMT, GROUP_INDEX_MAGIC, 0, 0, GROUP_INDEX_HEADER_SIZE,
+        )
+        if self._encrypted and encrypts_control(self._encrypt_mode):
             gi_bytes = self._encrypt_control(gi_bytes)
         self._file.write(gi_bytes)
         cursor += len(gi_bytes)
 
-        # ── Step 4: 写入 TOC ──
+        # ── TOC ──
         toc_offset = cursor
-        toc_bytes = self._build_toc()
-        if self._encrypted and self._encrypt_mode in (
-            EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
-        ):
+        toc_bytes = self._build_toc() if has_entries else b""
+        if toc_bytes and self._encrypted and encrypts_control(self._encrypt_mode):
             toc_bytes = self._encrypt_control(toc_bytes)
         self._file.write(toc_bytes)
-        cursor += len(toc_bytes)
 
-        # ── Step 5: 写入 Footer ──
+        # ── Footer ──
         footer_raw = struct.pack(FOOTER_FMT, MAGIC, toc_offset, 0)
         footer_crc = binascii.crc32(footer_raw[:12]) & 0xFFFFFFFF
         self._file.write(struct.pack(FOOTER_FMT, MAGIC, toc_offset, footer_crc))
 
-        # ── Step 6: 回写 Header ──
+        # ── 回写 Header ──
+        # group_index_size 位置存储 mi_encrypted_size，供 reader 定位 MI
         flags = FLAG_ENCRYPTED if self._encrypted else 0
-        # header 第 10 个字段（group_index_size 位置）存储 mi_encrypted_size
-        # Reader 用它精确读取 MI，GI 大小通过 toc_offset - gi_offset 计算
         header = struct.pack(
             HEADER_FMT,
             MAGIC, VERSION, flags, packed_at,
@@ -793,10 +652,10 @@ class MCPKWriter:
         """加密数据区 blob，返回 [salt(16B)] + [加密数据]。"""
         entry_salt = os.urandom(16)
         if self._kdf_type == KdfType.PBKDF2_AES:
-            blob_key = _derive_blob_key_aes(self._data_key_base, entry_id, entry_salt)
+            blob_key = derive_blob_key_aes(self._data_key_base, entry_id, entry_salt)
             encrypted = aes_gcm_encrypt(blob_key, blob, aad=struct.pack("<I", entry_id))
         else:
-            blob_key = _derive_blob_key(self._master_key, entry_id, entry_salt)
+            blob_key = derive_blob_key(self._master_key, entry_id, entry_salt)
             encrypted = xor_bytes(blob, blob_key)
         return entry_salt + encrypted
 
@@ -810,7 +669,10 @@ class MCPKWriter:
         group: Optional[Union[GroupEntry, str]] = None,
         group_name: Optional[str] = None,
     ) -> TocEntry:
-        stored_data = self._compress(original_data, compression)
+        if ".." in name or name.startswith("/") or name.startswith("\\"):
+            raise ValueError(f"不安全的文件名: {name}")
+        stored_data, actual_compression = compress(original_data, compression)
+        compression = actual_compression
         original_size = len(original_data)
         stored_size = len(stored_data)
         crc32_val = binascii.crc32(original_data) & 0xFFFFFFFF
@@ -835,10 +697,9 @@ class MCPKWriter:
                 gid = self.create_group(group_name).group_id
 
         if gid != NO_GROUP:
-            for g in self._groups.values():
-                if g.group_id == gid:
-                    g.entry_ids.append(len(self._entries))
-                    break
+            g = self._gid_to_group.get(gid)
+            if g is not None:
+                g.entry_ids.append(len(self._entries))
 
         meta_json = None
         if metadata:
@@ -857,23 +718,6 @@ class MCPKWriter:
         self._blobs.append(stored_data)
         return entry
 
-    def _compress(self, data: bytes, compression: int) -> bytes:
-        if compression == Compression.NONE:
-            return data
-        elif compression == Compression.ZLIB:
-            return zlib.compress(data, level=6)
-        elif compression == Compression.ZSTD:
-            m = _get_zstd()
-            if m is not None:
-                return m.compress(data, 3)
-            return zlib.compress(data, level=6)
-        elif compression == Compression.LZ4:
-            m = _get_lz4()
-            if m is not None:
-                return m.compress(data)
-            return zlib.compress(data, level=6)
-        else:
-            raise ValueError(f"未知压缩算法: {compression}")
 
     def _build_encryption_params(self) -> bytes:
         """构建 Encryption Params 区。"""
@@ -1024,57 +868,6 @@ class MCPKWriter:
             if meta_bytes:
                 parts.append(meta_bytes)
         return b"".join(parts)
-
-    def _write_empty_file(self):
-        packed_at = int(time.time() * 1000)
-        ep_offset = 0
-        ep_size = 0
-        if self._encrypted:
-            ep_offset = HEADER_SIZE
-            ep_bytes = self._build_encryption_params()
-            ep_size = len(ep_bytes)
-            self._file.write(ep_bytes)
-
-        magic_index_offset = HEADER_SIZE + ep_size
-        mi_bytes = struct.pack(
-            MAGIC_INDEX_HEADER_FMT,
-            MAGIC_INDEX_MAGIC, 0, MAGIC_INDEX_HEADER_SIZE,
-        )
-        if self._encrypted and self._encrypt_mode in (
-            EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
-        ):
-            mi_bytes = self._encrypt_control(mi_bytes)
-        mi_encrypted_size = len(mi_bytes)
-        self._file.write(mi_bytes)
-
-        group_index_offset = self._file.tell()
-        gi_bytes = struct.pack(
-            GROUP_INDEX_HEADER_FMT,
-            GROUP_INDEX_MAGIC, 0, 0, GROUP_INDEX_HEADER_SIZE,
-        )
-        if self._encrypted and self._encrypt_mode in (
-            EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
-        ):
-            gi_bytes = self._encrypt_control(gi_bytes)
-        self._file.write(gi_bytes)
-
-        toc_offset = self._file.tell()
-        footer_raw = struct.pack(FOOTER_FMT, MAGIC, toc_offset, 0)
-        footer_crc = binascii.crc32(footer_raw[:12]) & 0xFFFFFFFF
-        self._file.write(struct.pack(FOOTER_FMT, MAGIC, toc_offset, footer_crc))
-
-        flags = FLAG_ENCRYPTED if self._encrypted else 0
-        header = struct.pack(
-            HEADER_FMT,
-            MAGIC, VERSION, flags, packed_at,
-            ep_offset, ep_size,
-            0, 0,
-            group_index_offset, mi_encrypted_size,
-            toc_offset,
-        )
-        self._file.seek(0)
-        self._file.write(header)
-        self._file.close()
 
     @property
     def entries(self) -> list[TocEntry]:

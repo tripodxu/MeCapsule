@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import binascii
 import hashlib
-import json
 import struct
-import zlib
 from pathlib import Path
 from typing import Optional, Union
 
@@ -24,23 +22,26 @@ from .constants import (
     MAGIC, VERSION, HEADER_SIZE, FOOTER_SIZE,
     MAGIC_INDEX_MAGIC, GROUP_INDEX_MAGIC, ENCRYPTION_PARAMS_MAGIC,
     NO_GROUP, ENCRYPTION_PARAMS_SIZE_LEGACY, ENCRYPTION_PARAMS_SIZE_V2,
-    AES_GCM_NONCE_SIZE, AES_GCM_TAG_SIZE, FLAG_ENCRYPTED,
+    FLAG_ENCRYPTED,
     HEADER_FMT, FOOTER_FMT, TOC_ENTRY_FIXED_FMT, TOC_ENTRY_FIXED_SIZE,
     MAGIC_INDEX_HEADER_FMT, MAGIC_INDEX_HEADER_SIZE,
     MAGIC_ENTRY_FMT, MAGIC_ENTRY_SIZE,
     GROUP_INDEX_HEADER_FMT, GROUP_INDEX_HEADER_SIZE,
     ENCRYPTION_PARAMS_FMT_LEGACY, ENCRYPTION_PARAMS_FMT_V2,
+    TOC_ENTRY_FIXED_SIZE_V1,
+    GROUP_ENTRY_HEADER_SIZE, GROUP_RELATION_HEADER_SIZE, INTRA_RELATION_HEADER_SIZE,
     EntryType, Compression, GroupType, RelationType, IntraRelationType,
     EncryptionMode, KdfType,
+    encrypts_control, encrypts_data, enum_name,
 )
 from .types import (
     FileHeader, TocEntry, MagicEntry, GroupEntry, GroupRelation,
     IntraRelation, EncryptionParams,
 )
-from .writer import (
-    xor_bytes, _derive_key, _derive_control_key, _derive_blob_key,
-    _derive_key_pbkdf2, _derive_subkeys_aes, _derive_blob_key_aes,
-    aes_gcm_decrypt, HAS_CRYPTO, _get_zstd, _get_lz4,
+from .crypto import (
+    xor_bytes, derive_key, derive_control_key, derive_blob_key,
+    derive_key_pbkdf2, derive_subkeys_aes, derive_blob_key_aes,
+    aes_gcm_decrypt, HAS_CRYPTO, decompress,
 )
 
 
@@ -74,6 +75,7 @@ class MCPKReader:
         self._magic_entries: list[MagicEntry] = []
         self._groups: list[GroupEntry] = []
         self._group_by_name: dict[str, GroupEntry] = {}
+        self._name_index: dict[str, list[int]] = {}  # name -> [entry indices]
         self._relations: list[GroupRelation] = []
         self._loaded = False
         self._version: int = 1
@@ -167,18 +169,18 @@ class MCPKReader:
 
     def find_all(self, name: str, *, group: Optional[Union[str, int]] = None) -> list[TocEntry]:
         """返回所有同名条目。可按分组过滤。"""
-        gid = None
+        indices = self._name_index.get(name, [])
+        if not indices:
+            return []
+        entries = [self._entries[i] for i in indices]
         if group is not None:
-            if isinstance(group, int):
-                gid = group
-            else:
-                g = self.find_group(group)
-                if g is None:
-                    return []
-                gid = g.group_id
-        if gid is not None:
-            return [e for e in self._entries if e.name == name and e.group_id == gid]
-        return [e for e in self._entries if e.name == name]
+            gid = group if isinstance(group, int) else (
+                self.find_group(group).group_id if self.find_group(group) else None
+            )
+            if gid is None:
+                return []
+            entries = [e for e in entries if e.group_id == gid]
+        return entries
 
     def find_group(self, name: str) -> Optional[GroupEntry]:
         return self._group_by_name.get(name)
@@ -215,16 +217,14 @@ class MCPKReader:
     def extract_entry(self, entry: TocEntry) -> bytes:
         self._file.seek(entry.blob_offset)
 
-        if self._is_encrypted and self._enc_params.encrypt_mode in (
-            EncryptionMode.FULL, EncryptionMode.DATA_ONLY
-        ):
+        if self._is_encrypted and encrypts_data(self._enc_params.encrypt_mode):
             entry_id = self._entries.index(entry)
             entry_salt = self._file.read(16)
 
             if self._enc_params.is_aes:
                 # AES-GCM: nonce(12) + ciphertext + tag(16)
                 encrypted_data = self._file.read(entry.stored_size - 16)
-                blob_key = _derive_blob_key_aes(
+                blob_key = derive_blob_key_aes(
                     self._data_key_base, entry_id, entry_salt
                 )
                 try:
@@ -238,12 +238,12 @@ class MCPKReader:
             else:
                 # XOR: encrypted bytes
                 encrypted_data = self._file.read(entry.stored_size - 16)
-                blob_key = _derive_blob_key(self._master_key, entry_id, entry_salt)
+                blob_key = derive_blob_key(self._master_key, entry_id, entry_salt)
                 stored_data = xor_bytes(encrypted_data, blob_key)
         else:
             stored_data = self._file.read(entry.stored_size)
 
-        original_data = self._decompress(stored_data, entry.compression)
+        original_data = decompress(stored_data, entry.compression)
 
         if len(original_data) != entry.original_size:
             raise MCPKError(
@@ -284,10 +284,14 @@ class MCPKReader:
         entries = self.list_group_entries(group_name)
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        return [
-            self.extract_to(e.name, output_dir, preserve_structure=preserve_structure)
-            for e in entries
-        ]
+        paths = []
+        for e in entries:
+            data = self.extract_entry(e)
+            out_path = output_dir / e.name if preserve_structure else output_dir / Path(e.name).name
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(data)
+            paths.append(out_path)
+        return paths
 
     def get_metadata(self, name: str, *, group: Optional[Union[str, int]] = None,
                      index: int = 0) -> dict:
@@ -319,9 +323,7 @@ class MCPKReader:
             try:
                 self._file.seek(self._header.magic_index_offset)
                 mi_data = self._file.read(self._header.magic_index_size)
-                if self._is_encrypted and self._enc_params.encrypt_mode in (
-                    EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
-                ):
+                if self._is_encrypted and encrypts_control(self._enc_params.encrypt_mode):
                     mi_data = self._decrypt_control(mi_data)
                 if mi_data[:4] != MAGIC_INDEX_MAGIC:
                     errors.append("Magic Index magic 不匹配")
@@ -345,9 +347,9 @@ class MCPKReader:
             total_stored += e.stored_size
             entries_info.append({
                 "name": e.name,
-                "type": EntryType(e.entry_type).name if e.entry_type in EntryType._value2member_map_ else f"0x{e.entry_type:02x}",
+                "type": enum_name(EntryType, e.entry_type),
                 "mime": e.mime_type,
-                "compression": Compression(e.compression).name if e.compression in Compression._value2member_map_ else f"0x{e.compression:02x}",
+                "compression": enum_name(Compression, e.compression),
                 "original_size": e.original_size,
                 "stored_size": e.stored_size,
                 "ratio": f"{e.compression_ratio:.2f}x" if e.stored_size > 0 else "N/A",
@@ -391,15 +393,13 @@ class MCPKReader:
             result["groups"] = [
                 {
                     "group_id": g.group_id, "name": g.name,
-                    "type": GroupType(g.group_type).name if g.group_type in GroupType._value2member_map_ else f"0x{g.group_type:02x}",
+                    "type": enum_name(GroupType, g.group_type),
                     "entry_count": len(g.entry_ids), "entry_ids": g.entry_ids,
                     "tags": g.tags,
                     "intra_relations": [
                         {
                             "source": ir.source_entry, "target": ir.target_entry,
-                            "type": IntraRelationType(ir.relation_type).name
-                                if ir.relation_type in IntraRelationType._value2member_map_
-                                else f"0x{ir.relation_type:02x}",
+                            "type": enum_name(IntraRelationType, ir.relation_type),
                             "description": ir.description,
                         }
                         for ir in g.intra_relations
@@ -411,7 +411,7 @@ class MCPKReader:
             result["relations"] = [
                 {
                     "source": r.source_group, "target": r.target_group,
-                    "type": RelationType(r.relation_type).name if r.relation_type in RelationType._value2member_map_ else f"0x{r.relation_type:02x}",
+                    "type": enum_name(RelationType, r.relation_type),
                     "description": r.description,
                 }
                 for r in self._relations
@@ -455,8 +455,9 @@ class MCPKReader:
             self._load_v2(header_data)
         else:
             raise MCPKError(f"不支持的版本 {version}")
-        # 构建快速查找索引
         self._group_by_name = {g.name: g for g in self._groups}
+        for i, e in enumerate(self._entries):
+            self._name_index.setdefault(e.name, []).append(i)
         self._loaded = True
 
     def _load_v1(self, header_data: bytes):
@@ -522,11 +523,11 @@ class MCPKReader:
                         "此文件使用 AES-256-GCM 加密，请安装 cryptography: "
                         "pip install cryptography"
                     )
-                self._master_key = _derive_key_pbkdf2(
+                self._master_key = derive_key_pbkdf2(
                     self._password, self._enc_params.salt,
                     self._enc_params.kdf_iterations,
                 )
-                self._control_key, self._data_key_base = _derive_subkeys_aes(
+                self._control_key, self._data_key_base = derive_subkeys_aes(
                     self._master_key
                 )
                 computed_verify = hashlib.sha256(
@@ -535,8 +536,8 @@ class MCPKReader:
                 if computed_verify != self._enc_params.control_key_hash:
                     raise MCPKError("密码错误或文件已损坏")
             else:
-                self._master_key = _derive_key(self._password, self._enc_params.salt)
-                self._control_key = _derive_control_key(self._master_key)
+                self._master_key = derive_key(self._password, self._enc_params.salt)
+                self._control_key = derive_control_key(self._master_key)
                 computed_hash = hashlib.sha256(self._control_key).digest()
                 if computed_hash != self._enc_params.control_key_hash:
                     raise MCPKError("密码错误或文件已损坏")
@@ -560,9 +561,7 @@ class MCPKReader:
         if mi_encrypted_size > 0:
             self._file.seek(magic_index_offset)
             mi_data = self._file.read(mi_encrypted_size)
-            if self._is_encrypted and self._enc_params.encrypt_mode in (
-                EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
-            ):
+            if self._is_encrypted and encrypts_control(self._enc_params.encrypt_mode):
                 mi_data = self._decrypt_control(mi_data)
             self._magic_entries = self._parse_magic_index(mi_data)
 
@@ -570,9 +569,7 @@ class MCPKReader:
         if gi_encrypted_size > 0:
             self._file.seek(group_index_offset)
             gi_data = self._file.read(gi_encrypted_size)
-            if self._is_encrypted and self._enc_params.encrypt_mode in (
-                EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
-            ):
+            if self._is_encrypted and encrypts_control(self._enc_params.encrypt_mode):
                 gi_data = self._decrypt_control(gi_data)
             self._groups, self._relations = self._parse_group_index(gi_data)
 
@@ -581,9 +578,7 @@ class MCPKReader:
         toc_size = footer_offset - toc_offset
         self._file.seek(toc_offset)
         toc_data = self._file.read(toc_size)
-        if self._is_encrypted and self._enc_params.encrypt_mode in (
-            EncryptionMode.FULL, EncryptionMode.METADATA_ONLY
-        ):
+        if self._is_encrypted and encrypts_control(self._enc_params.encrypt_mode):
             toc_data = self._decrypt_control(toc_data)
         self._entries = self._parse_toc(toc_data, entry_count, version=2)
 
@@ -650,12 +645,12 @@ class MCPKReader:
             raise MCPKError(f"Group Index magic 不匹配: {gi_magic!r}")
         offset = GROUP_INDEX_HEADER_SIZE
         for i in range(group_count):
-            if offset + 6 > len(data):
+            if offset + GROUP_ENTRY_HEADER_SIZE > len(data):
                 raise MCPKError(f"Group Entry 数据越界 (分组 {i})")
             group_id, entry_count, group_type, name_len = struct.unpack_from(
                 "<BBH H", data, offset
             )
-            offset += 6
+            offset += GROUP_ENTRY_HEADER_SIZE
             name = data[offset:offset + name_len].decode("utf-8")
             offset += name_len
             meta_len = struct.unpack_from("<H", data, offset)[0]
@@ -692,7 +687,7 @@ class MCPKReader:
                 src_eid, tgt_eid, ir_type, ir_dlen = struct.unpack_from(
                     "<II H H", data, offset
                 )
-                offset += 12
+                offset += INTRA_RELATION_HEADER_SIZE
                 ir_desc = ""
                 if ir_dlen > 0:
                     ir_desc = data[offset:offset + ir_dlen].decode("utf-8")
@@ -708,10 +703,10 @@ class MCPKReader:
                 tags=tags, intra_relations=intra_rels,
             ))
         for i in range(relation_count):
-            if offset + 6 > len(data):
+            if offset + GROUP_RELATION_HEADER_SIZE > len(data):
                 raise MCPKError(f"Relation 数据越界 (关系 {i})")
             src, tgt, rtype, dlen = struct.unpack_from("<BBH H", data, offset)
-            offset += 6
+            offset += GROUP_RELATION_HEADER_SIZE
             desc = ""
             if dlen > 0:
                 desc = data[offset:offset + dlen].decode("utf-8")
@@ -725,7 +720,7 @@ class MCPKReader:
     def _parse_toc(self, toc_data: bytes, expected_count: int, version: int = 2) -> list[TocEntry]:
         entries = []
         offset = 0
-        fixed_size = TOC_ENTRY_FIXED_SIZE if version >= 2 else 42
+        fixed_size = TOC_ENTRY_FIXED_SIZE if version >= 2 else TOC_ENTRY_FIXED_SIZE_V1
 
         for i in range(expected_count):
             if offset + fixed_size > len(toc_data):
@@ -773,20 +768,3 @@ class MCPKReader:
             ))
         return entries
 
-    def _decompress(self, data: bytes, compression: int) -> bytes:
-        if compression == Compression.NONE:
-            return data
-        elif compression == Compression.ZLIB:
-            return zlib.decompress(data)
-        elif compression == Compression.ZSTD:
-            m = _get_zstd()
-            if m is not None:
-                return m.decompress(data)
-            raise MCPKError("数据使用 zstd 压缩，请安装 zstd: pip install zstd")
-        elif compression == Compression.LZ4:
-            m = _get_lz4()
-            if m is not None:
-                return m.decompress(data)
-            raise MCPKError("数据使用 lz4 压缩，请安装 lz4: pip install lz4")
-        else:
-            raise MCPKError(f"未知压缩算法: {compression}")

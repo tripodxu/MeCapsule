@@ -24,7 +24,8 @@ from .types import (
     TocEntry, FileHeader, MagicEntry, GroupEntry, GroupRelation,
     IntraRelation, EncryptionParams,
 )
-from .writer import MCPKWriter, xor_bytes
+from .writer import MCPKWriter
+from .crypto import xor_bytes
 from .reader import MCPKReader
 
 __version__ = "2.2.0"

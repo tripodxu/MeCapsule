@@ -111,20 +111,12 @@ class TocEntry:
         }
 
     def __repr__(self) -> str:
-        from .constants import EntryType, Compression
-        try:
-            type_name = EntryType(self.entry_type).name
-        except ValueError:
-            type_name = f"0x{self.entry_type:02x}"
-        try:
-            comp_name = Compression(self.compression).name
-        except ValueError:
-            comp_name = f"0x{self.compression:02x}"
+        from .constants import EntryType, Compression, enum_name
         return (
-            f"TocEntry({type_name}, name={self.name!r}, "
+            f"TocEntry({enum_name(EntryType, self.entry_type)}, name={self.name!r}, "
             f"mime={self.mime_type!r}, "
             f"original={self.original_size}, stored={self.stored_size}, "
-            f"comp={comp_name}, crc32=0x{self.crc32:08x}, "
+            f"comp={enum_name(Compression, self.compression)}, crc32=0x{self.crc32:08x}, "
             f"group={self.group_id})"
         )
 
@@ -139,14 +131,10 @@ class MagicEntry:
     name: str = ""
 
     def __repr__(self) -> str:
-        from .constants import EntryType
-        try:
-            type_name = EntryType(self.entry_type).name
-        except ValueError:
-            type_name = f"0x{self.entry_type:02x}"
+        from .constants import EntryType, enum_name
         magic_hex = self.magic_bytes[:8].hex() if self.magic_bytes else "N/A"
         return (
-            f"MagicEntry(id={self.entry_id}, type={type_name}, "
+            f"MagicEntry(id={self.entry_id}, type={enum_name(EntryType, self.entry_type)}, "
             f"group={self.group_id}, magic={magic_hex}..., "
             f"name={self.name!r})"
         )
@@ -161,14 +149,10 @@ class IntraRelation:
     description: str = ""
 
     def __repr__(self) -> str:
-        from .constants import IntraRelationType
-        try:
-            type_name = IntraRelationType(self.relation_type).name
-        except ValueError:
-            type_name = f"0x{self.relation_type:02x}"
+        from .constants import IntraRelationType, enum_name
         return (
             f"IntraRelation({self.source_entry} -> {self.target_entry}, "
-            f"type={type_name}, desc={self.description!r})"
+            f"type={enum_name(IntraRelationType, self.relation_type)}, desc={self.description!r})"
         )
 
 
@@ -190,15 +174,11 @@ class GroupEntry:
         return json.loads(self.metadata)
 
     def __repr__(self) -> str:
-        from .constants import GroupType
-        try:
-            type_name = GroupType(self.group_type).name
-        except ValueError:
-            type_name = f"0x{self.group_type:02x}"
+        from .constants import GroupType, enum_name
         tags_str = f", tags={self.tags}" if self.tags else ""
         ir_str = f", intra_rels={len(self.intra_relations)}" if self.intra_relations else ""
         return (
-            f"GroupEntry(id={self.group_id}, type={type_name}, "
+            f"GroupEntry(id={self.group_id}, type={enum_name(GroupType, self.group_type)}, "
             f"name={self.name!r}, entries={self.entry_ids}"
             f"{tags_str}{ir_str})"
         )
@@ -213,12 +193,8 @@ class GroupRelation:
     description: str = ""
 
     def __repr__(self) -> str:
-        from .constants import RelationType
-        try:
-            type_name = RelationType(self.relation_type).name
-        except ValueError:
-            type_name = f"0x{self.relation_type:02x}"
+        from .constants import RelationType, enum_name
         return (
             f"GroupRelation({self.source_group} -> {self.target_group}, "
-            f"type={type_name}, desc={self.description!r})"
+            f"type={enum_name(RelationType, self.relation_type)}, desc={self.description!r})"
         )
