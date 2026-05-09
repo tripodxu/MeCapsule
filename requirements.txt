@@ -1,0 +1,12 @@
+# MCPK — MeCapsule Package
+# 核心依赖：无（仅使用 Python 标准库）
+# 以下为可选依赖，按需安装
+
+# AES-256-GCM 高强度加密（默认加密模式）
+cryptography>=41.0.0
+
+# Zstandard 压缩（WAV 等音频文件推荐）
+zstd>=1.5.0
+
+# LZ4 压缩（极速压缩/解压）
+lz4>=4.0.0
