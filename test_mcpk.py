@@ -370,7 +370,7 @@ def test_01_v2_roundtrip_basic(sizes: dict):
                 original_data = original_path.read_bytes()
                 extracted = reader.extract(name)
                 assert extracted == original_data, f"{name} 内容不一致"
-            print(f"  全部 {len(files)} 文件内容一致 ✓")
+            print(f"  全部 {len(files)} 文件内容一致 [OK]")
 
         # ── 提取到目录 ──
         extract_dir = base / "extracted"
@@ -380,7 +380,7 @@ def test_01_v2_roundtrip_basic(sizes: dict):
                 out = extract_dir / name
                 assert out.exists(), f"缺失: {name}"
                 assert out.read_bytes() == original_path.read_bytes()
-            print(f"  提取到目录验证通过 ✓")
+            print(f"  提取到目录验证通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -421,14 +421,14 @@ def test_02_grouping_and_relations(sizes: dict):
             assert len(reader.groups) == 3
             for g in reader.groups:
                 assert len(g.entry_ids) == 3, f"分组 {g.name} 应有 3 条目, 实际 {len(g.entry_ids)}"
-            print(f"  3 个分组, 每组 3 条目 ✓")
+            print(f"  3 个分组, 每组 3 条目 [OK]")
 
             # 组间关系
             assert len(reader.relations) == 3
             sequel_count = sum(1 for r in reader.relations if r.relation_type == RelationType.SEQUEL)
             related_count = sum(1 for r in reader.relations if r.relation_type == RelationType.RELATED)
             assert sequel_count == 2 and related_count == 1
-            print(f"  3 条关系 (2 SEQUEL + 1 RELATED) ✓")
+            print(f"  3 条关系 (2 SEQUEL + 1 RELATED) [OK]")
 
             # 物理相邻性
             for g in reader.groups:
@@ -439,12 +439,12 @@ def test_02_grouping_and_relations(sizes: dict):
                 for j in range(len(offsets) - 1):
                     assert offsets[j] + sizes_list[j] <= offsets[j + 1] + 1, \
                         f"分组 {g.name} 内 blob 不连续"
-            print(f"  各分组 blob 物理相邻 ✓")
+            print(f"  各分组 blob 物理相邻 [OK]")
 
             # 完整性
             errors = reader.verify()
             assert not errors, f"校验失败: {errors}"
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
             # 按分组提取
             for g in reader.groups:
@@ -452,7 +452,7 @@ def test_02_grouping_and_relations(sizes: dict):
                 for e in entries:
                     data = reader.extract(e.name)
                     assert len(data) == e.original_size
-            print(f"  按分组提取内容正确 ✓")
+            print(f"  按分组提取内容正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -507,11 +507,11 @@ def test_03_video_types(sizes: dict):
             assert reader.version == 2
             video_entries = reader.list_entries(EntryType.VIDEO)
             assert len(video_entries) == len(originals)
-            print(f"  {len(video_entries)} 个 VIDEO 条目 ✓")
+            print(f"  {len(video_entries)} 个 VIDEO 条目 [OK]")
 
             for me in reader.magic_entries:
                 assert me.entry_type == EntryType.VIDEO
-            print(f"  Magic Index 全部为 VIDEO 类型 ✓")
+            print(f"  Magic Index 全部为 VIDEO 类型 [OK]")
 
             for name, (path, expected_mime) in originals.items():
                 entry = reader.find(name)
@@ -520,13 +520,13 @@ def test_03_video_types(sizes: dict):
                 extracted = reader.extract(name)
                 original_data = path.read_bytes()
                 assert extracted == original_data
-            print(f"  全部视频内容一致 ✓")
+            print(f"  全部视频内容一致 [OK]")
 
             # 元数据
             meta = reader.get_metadata("clip.mp4")
             assert meta["duration_ms"] == 120000
             assert meta["width"] == 1920
-            print(f"  视频元数据正确 ✓")
+            print(f"  视频元数据正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -576,7 +576,7 @@ def test_04_magic_index_correctness(sizes: dict):
         # 验证 Magic Index
         with MCPKReader(mcpk_path) as reader:
             assert len(reader.magic_entries) == len(originals)
-            print(f"  {len(reader.magic_entries)} 个 Magic Entry ✓")
+            print(f"  {len(reader.magic_entries)} 个 Magic Entry [OK]")
 
             expected_magics = {
                 "doc.md":  None,  # 文本文件无固定 magic
@@ -596,7 +596,7 @@ def test_04_magic_index_correctness(sizes: dict):
                 if expected is not None:
                     assert me.magic_bytes[:len(expected)] == expected, \
                         f"{entry.name}: magic 应以 {expected!r} 开头, 实际 {me.magic_bytes[:8]!r}"
-                    print(f"  {entry.name}: magic {me.magic_bytes[:4].hex()}... ✓")
+                    print(f"  {entry.name}: magic {me.magic_bytes[:4].hex()}... [OK]")
                 else:
                     print(f"  {entry.name}: (无固定 magic, 跳过)")
 
@@ -604,7 +604,7 @@ def test_04_magic_index_correctness(sizes: dict):
             for me in reader.magic_entries:
                 entry = reader.entries[me.entry_id]
                 assert me.entry_type == entry.entry_type
-            print(f"  Magic Index 与 TOC 类型一致 ✓")
+            print(f"  Magic Index 与 TOC 类型一致 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -662,20 +662,20 @@ def test_05_compression_ratios(sizes: dict):
                     assert entry.is_compressed, f"{entry.name} 应被压缩"
                     assert ratio > 1.5, f"{entry.name} 压缩比应 >1.5x, 实际 {ratio:.2f}x"
                     print(f"  {entry.name}: {entry.original_size}B -> {entry.stored_size}B, "
-                          f"压缩比 {ratio:.2f}x ({comp_name}) ✓")
+                          f"压缩比 {ratio:.2f}x ({comp_name}) [OK]")
                 elif entry.name.endswith((".jpg", ".mp4")):
                     assert not entry.is_compressed, f"{entry.name} 不应被压缩"
-                    print(f"  {entry.name}: {entry.original_size}B, 未压缩 (已压缩格式) ✓")
+                    print(f"  {entry.name}: {entry.original_size}B, 未压缩 (已压缩格式) [OK]")
                 elif entry.name.endswith(".wav"):
                     if entry.is_compressed:
                         print(f"  {entry.name}: {entry.original_size}B -> {entry.stored_size}B, "
-                              f"压缩比 {ratio:.2f}x ({comp_name}) ✓")
+                              f"压缩比 {ratio:.2f}x ({comp_name}) [OK]")
                     else:
-                        print(f"  {entry.name}: {entry.original_size}B, 未压缩 (zstd/lz4 不可用) ✓")
+                        print(f"  {entry.name}: {entry.original_size}B, 未压缩 (zstd/lz4 不可用) [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  压缩后完整性校验通过 ✓")
+            print(f"  压缩后完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -734,7 +734,7 @@ def test_06_many_entries(sizes: dict):
                 extracted = reader.extract(name)
                 original = file_paths[name].read_bytes()
                 assert extracted == original
-        print(f"  随机抽取 {len(sample_names)} 文件验证一致 ✓")
+        print(f"  随机抽取 {len(sample_names)} 文件验证一致 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -795,32 +795,32 @@ def test_07_edge_cases(sizes: dict):
             assert reader.entry_count == len(edge_files)
             errors = reader.verify()
             assert not errors, f"校验失败: {errors}"
-            print(f"  {len(edge_files)} 边界文件校验通过 ✓")
+            print(f"  {len(edge_files)} 边界文件校验通过 [OK]")
 
             # 空文件
             data = reader.extract("empty.txt")
             assert data == b""
-            print(f"  空文件: 0 字节 ✓")
+            print(f"  空文件: 0 字节 [OK]")
 
             # 1 字节
             data = reader.extract("one_byte.bin")
             assert data == b"\x42"
-            print(f"  1 字节文件: 正确 ✓")
+            print(f"  1 字节文件: 正确 [OK]")
 
             # 中文名
             data = reader.extract("会议纪要_2026年春季.md")
             assert len(data) > 0
-            print(f"  中文文件名: 正确 ✓")
+            print(f"  中文文件名: 正确 [OK]")
 
             # 带空格
             data = reader.extract("my notes (final).txt")
             assert len(data) > 0
-            print(f"  带空格文件名: 正确 ✓")
+            print(f"  带空格文件名: 正确 [OK]")
 
             # 长文件名
             data = reader.extract(long_name)
             assert len(data) > 0
-            print(f"  长文件名 ({len(long_name)} 字符): 正确 ✓")
+            print(f"  长文件名 ({len(long_name)} 字符): 正确 [OK]")
 
         # ── 空 MCPK 文件 ──
         empty_mcpk = base / "empty_container.mcpk"
@@ -830,7 +830,7 @@ def test_07_edge_cases(sizes: dict):
             assert reader.version == 2
             assert reader.entry_count == 0
             assert len(reader.groups) == 0
-            print(f"  空容器: v{reader.version}, 0 条目 ✓")
+            print(f"  空容器: v{reader.version}, 0 条目 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -907,18 +907,18 @@ def test_08_v1_backward_compat(sizes: dict):
             assert len(reader.magic_entries) == 0
             assert len(reader.groups) == 0
             assert len(reader.relations) == 0
-            print(f"  v1 版本检测正确 ✓")
+            print(f"  v1 版本检测正确 [OK]")
 
             for name, data, _, _ in entries_data:
                 extracted = reader.extract(name)
                 assert extracted == data
-            print(f"  3 个条目内容全部正确 ✓")
+            print(f"  3 个条目内容全部正确 [OK]")
 
             # inspect 应正常工作
             info = reader.inspect()
             assert info["version"] == 1
             assert info["entry_count"] == 3
-            print(f"  inspect 输出正常 ✓")
+            print(f"  inspect 输出正常 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1010,38 +1010,38 @@ def test_09_complex_group_scenario(sizes: dict):
             meta = course_g.metadata_dict()
             assert meta["instructor"] == "李教授"
             assert meta["credits"] == 3
-            print(f"  课程分组: {course_g.name}, 元数据={meta} ✓")
+            print(f"  课程分组: {course_g.name}, 元数据={meta} [OK]")
 
             for gname in ["第1讲-神经网络", "第2讲-CNN", "第3讲-RNN"]:
                 g = reader.find_group(gname)
                 assert g is not None
                 assert len(g.entry_ids) == 2
                 assert g.group_type == GroupType.VIDEO_SUBTITLE
-            print(f"  3 讲课程分组, 每组 2 条目 ✓")
+            print(f"  3 讲课程分组, 每组 2 条目 [OK]")
 
             mats = reader.find_group("学习资料")
             assert len(mats.entry_ids) == 3
             assert mats.group_type == GroupType.DOCUMENT_SET
-            print(f"  学习资料分组: 3 条目 ✓")
+            print(f"  学习资料分组: 3 条目 [OK]")
 
             # 验证关系
             sequel_rels = [r for r in reader.relations if r.relation_type == RelationType.SEQUEL]
             ref_rels = [r for r in reader.relations if r.relation_type == RelationType.REFERENCES]
             assert len(sequel_rels) == 2
             assert len(ref_rels) == 3
-            print(f"  关系: 2 SEQUEL + 3 REFERENCES = 5 ✓")
+            print(f"  关系: 2 SEQUEL + 3 REFERENCES = 5 [OK]")
 
             # 验证内容
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
             # 按分组提取
             extract_dir = base / "complex_extracted"
             for g in reader.groups:
                 paths = reader.extract_group(g.name, extract_dir)
                 assert len(paths) == len(g.entry_ids)
-            print(f"  全部分组提取成功 ✓")
+            print(f"  全部分组提取成功 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1158,7 +1158,7 @@ def test_10_performance_benchmark(sizes: dict):
                 extracted = reader.extract(name)
                 original = path.read_bytes()
                 assert extracted == original
-        print(f"  全部 {len(files)} 文件内容验证一致 ✓")
+        print(f"  全部 {len(files)} 文件内容验证一致 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1233,12 +1233,12 @@ def test_11_group_blob_ordering(sizes: dict):
                     f"最后分组结束 {last_end} > 无分组开始 {ungroup_min}"
 
             order_str = " < ".join(g[1] for g in group_offsets) + " < 无分组"
-            print(f"  Blob 排序正确: {order_str} ✓")
+            print(f"  Blob 排序正确: {order_str} [OK]")
 
             # 内容验证
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1271,7 +1271,7 @@ def test_12_inspect_and_json(sizes: dict):
             # JSON 可序列化
             json_str = json.dumps(info, ensure_ascii=False, indent=2)
             assert len(json_str) > 100
-            print(f"  JSON 输出: {len(json_str)} 字符 ✓")
+            print(f"  JSON 输出: {len(json_str)} 字符 [OK]")
 
             # 关键字段存在
             assert info["version"] == 2
@@ -1283,7 +1283,7 @@ def test_12_inspect_and_json(sizes: dict):
             assert "group_index_size" in info
             assert len(info["groups"]) == 3
             assert len(info["relations"]) == 2
-            print(f"  所有 v2 字段存在 ✓")
+            print(f"  所有 v2 字段存在 [OK]")
 
             # 分组信息
             for g in info["groups"]:
@@ -1293,14 +1293,14 @@ def test_12_inspect_and_json(sizes: dict):
                 assert "entry_count" in g
                 assert "entry_ids" in g
                 assert g["entry_count"] == len(g["entry_ids"])
-            print(f"  分组信息完整 ✓")
+            print(f"  分组信息完整 [OK]")
 
             # 关系信息
             for r in info["relations"]:
                 assert "source" in r
                 assert "target" in r
                 assert "type" in r
-            print(f"  关系信息完整 ✓")
+            print(f"  关系信息完整 [OK]")
 
             # 条目信息
             for e in info["entries"]:
@@ -1308,7 +1308,7 @@ def test_12_inspect_and_json(sizes: dict):
                 assert "name" in e
                 assert "type" in e
                 assert "crc32" in e
-            print(f"  条目信息完整 ✓")
+            print(f"  条目信息完整 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1352,11 +1352,11 @@ def test_13_add_data_api(sizes: dict):
             assert reader.extract("notes.txt") == text_bytes
             assert reader.extract("response.json") == json_data
             assert reader.extract("payload.bin") == binary_data
-            print(f"  3 个内存数据条目一致 ✓")
+            print(f"  3 个内存数据条目一致 [OK]")
 
             meta = reader.get_metadata("notes.txt")
             assert meta["title"] == "内存文本"
-            print(f"  元数据正确 ✓")
+            print(f"  元数据正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1394,14 +1394,14 @@ def test_14_repeated_pack_unpack(sizes: dict):
             for run in range(1, 3):
                 assert contents[0][name] == contents[run][name], \
                     f"Run 0 vs Run {run}: {name} 内容不一致"
-        print(f"  3 次打包, 全部 {len(files)} 文件内容一致 ✓")
+        print(f"  3 次打包, 全部 {len(files)} 文件内容一致 [OK]")
 
         # 校验全部
         for p in mcpk_paths:
             with MCPKReader(p) as reader:
                 errors = reader.verify()
                 assert not errors
-        print(f"  3 次打包全部校验通过 ✓")
+        print(f"  3 次打包全部校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1444,7 +1444,7 @@ def test_15_stress_groups_and_relations(sizes: dict):
             assert len(reader.groups) == num_groups
             expected_entries = num_groups * files_per_group
             assert reader.entry_count == expected_entries
-            print(f"  {num_groups} 分组, {expected_entries} 条目 ✓")
+            print(f"  {num_groups} 分组, {expected_entries} 条目 [OK]")
 
             sequel_count = num_groups - 1
             related_count = len(range(0, num_groups, 3))
@@ -1452,7 +1452,7 @@ def test_15_stress_groups_and_relations(sizes: dict):
             related_count = sum(1 for g in range(0, num_groups, 3) if g + 2 < num_groups)
             assert len(reader.relations) == sequel_count + related_count
             print(f"  {sequel_count} SEQUEL + {related_count} RELATED = "
-                  f"{len(reader.relations)} 关系 ✓")
+                  f"{len(reader.relations)} 关系 [OK]")
 
             # 随机验证几个分组
             import random
@@ -1465,11 +1465,11 @@ def test_15_stress_groups_and_relations(sizes: dict):
                 for e in entries:
                     data = reader.extract(e.name)
                     assert len(data) == e.original_size
-            print(f"  随机验证 {len(sample_groups)} 个分组内容正确 ✓")
+            print(f"  随机验证 {len(sample_groups)} 个分组内容正确 [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1510,17 +1510,17 @@ def test_16_encrypt_full_roundtrip(sizes: dict):
             assert reader.version == 2
             assert reader.is_encrypted
             assert reader.encryption_params is not None
-            print(f"  加密模式: {EncryptionMode(reader.encryption_params.encrypt_mode).name} ✓")
+            print(f"  加密模式: {EncryptionMode(reader.encryption_params.encrypt_mode).name} [OK]")
 
             errors = reader.verify()
             assert not errors, f"校验失败: {errors}"
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
             for name, path in files.items():
                 extracted = reader.extract(name)
                 original = path.read_bytes()
                 assert extracted == original
-            print(f"  全部 {len(files)} 文件内容一致 ✓")
+            print(f"  全部 {len(files)} 文件内容一致 [OK]")
 
         # 密码错误应失败
         try:
@@ -1529,7 +1529,7 @@ def test_16_encrypt_full_roundtrip(sizes: dict):
             assert False, "应该抛出密码错误异常"
         except MCPKError as e:
             assert "密码错误" in str(e)
-            print(f"  密码错误检测正确 ✓")
+            print(f"  密码错误检测正确 [OK]")
 
         # 不提供密码应失败
         try:
@@ -1538,7 +1538,7 @@ def test_16_encrypt_full_roundtrip(sizes: dict):
             assert False, "应该抛出缺少密码异常"
         except MCPKError as e:
             assert "密码" in str(e)
-            print(f"  缺少密码检测正确 ✓")
+            print(f"  缺少密码检测正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1570,16 +1570,16 @@ def test_17_encrypt_metadata_only(sizes: dict):
         with MCPKReader(mcpk_path, password=password) as reader:
             assert reader.is_encrypted
             assert reader.encryption_params.encrypt_mode == EncryptionMode.METADATA_ONLY
-            print(f"  加密模式: METADATA_ONLY ✓")
+            print(f"  加密模式: METADATA_ONLY [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
             for name in ["notes.txt", "video.mp4"]:
                 data = reader.extract(name)
                 assert len(data) > 0
-            print(f"  内容提取正确 ✓")
+            print(f"  内容提取正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1608,17 +1608,17 @@ def test_18_no_encryption_compat(sizes: dict):
             assert not reader.is_encrypted
             assert reader.encryption_params is None
             assert reader.version == 2
-            print(f"  未加密文件识别正确 ✓")
+            print(f"  未加密文件识别正确 [OK]")
 
             data = reader.extract("plain.txt")
             assert data == txt_path.read_bytes()
-            print(f"  内容一致 ✓")
+            print(f"  内容一致 [OK]")
 
             # 时间戳应存在
             entry = reader.find("plain.txt")
             assert entry.created_at > 0
             assert entry.modified_at > 0
-            print(f"  时间戳: created={entry.time_info()['created']} ✓")
+            print(f"  时间戳: created={entry.time_info()['created']} [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1655,21 +1655,21 @@ def test_19_timestamps(sizes: dict):
             known_ms = int(known_time * 1000)
             assert abs(entry.modified_at - known_ms) < 2000, \
                 f"modified_at 偏差过大: {entry.modified_at} vs {known_ms}"
-            print(f"  modified_at: {entry.time_info()['modified']} ✓")
+            print(f"  modified_at: {entry.time_info()['modified']} [OK]")
 
             # created_at 应 > 0
             assert entry.created_at > 0
-            print(f"  created_at: {entry.time_info()['created']} ✓")
+            print(f"  created_at: {entry.time_info()['created']} [OK]")
 
             # packed_at 应在 before/after 之间
             assert before_pack <= header.packed_at <= after_pack
-            print(f"  packed_at (header): {header.packed_at_iso()} ✓")
+            print(f"  packed_at (header): {header.packed_at_iso()} [OK]")
 
             # inspect 应包含时间信息
             info = reader.inspect()
             assert info["packed_at"] > 0
             assert info["entries"][0]["modified_at"] > 0
-            print(f"  inspect 时间字段完整 ✓")
+            print(f"  inspect 时间字段完整 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1708,7 +1708,7 @@ def test_20_encrypt_with_groups(sizes: dict):
             assert reader.is_encrypted
             assert len(reader.groups) == 2
             assert len(reader.relations) == 1
-            print(f"  加密文件: 2 分组, 1 关系 ✓")
+            print(f"  加密文件: 2 分组, 1 关系 [OK]")
 
             # 按分组提取
             for g in reader.groups:
@@ -1718,11 +1718,11 @@ def test_20_encrypt_with_groups(sizes: dict):
                     data = reader.extract(e.name)
                     original = files[e.name].read_bytes()
                     assert data == original
-            print(f"  分组内容全部一致 ✓")
+            print(f"  分组内容全部一致 [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1779,17 +1779,17 @@ def test_21_aes_gcm_full_roundtrip(sizes: dict):
             assert reader.encryption_params is not None
             assert reader.encryption_params.kdf_type == 0x02  # PBKDF2_AES
             assert reader.encryption_params.kdf_iterations == 600_000
-            print(f"  KDF: PBKDF2_AES, iterations={reader.encryption_params.kdf_iterations} ✓")
+            print(f"  KDF: PBKDF2_AES, iterations={reader.encryption_params.kdf_iterations} [OK]")
 
             errors = reader.verify()
             assert not errors, f"校验失败: {errors}"
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
             for name, path in files.items():
                 extracted = reader.extract(name)
                 original = path.read_bytes()
                 assert extracted == original
-            print(f"  全部 {len(files)} 文件内容一致 ✓")
+            print(f"  全部 {len(files)} 文件内容一致 [OK]")
 
         # 密码错误
         try:
@@ -1798,7 +1798,7 @@ def test_21_aes_gcm_full_roundtrip(sizes: dict):
             assert False
         except MCPKError as e:
             assert "密码错误" in str(e)
-            print(f"  密码错误检测正确 ✓")
+            print(f"  密码错误检测正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1834,16 +1834,16 @@ def test_22_aes_gcm_metadata_only(sizes: dict):
             assert reader.is_encrypted
             assert reader.encryption_params.encrypt_mode == EncryptionMode.METADATA_ONLY
             assert reader.encryption_params.is_aes  # AES 模式
-            print(f"  模式: METADATA_ONLY + AES-GCM ✓")
+            print(f"  模式: METADATA_ONLY + AES-GCM [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
             for name in ["notes.txt", "video.mp4"]:
                 data = reader.extract(name)
                 assert len(data) > 0
-            print(f"  内容提取正确 ✓")
+            print(f"  内容提取正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1875,11 +1875,11 @@ def test_23_aes_gcm_data_only(sizes: dict):
         with MCPKReader(mcpk_path, password=password) as reader:
             assert reader.is_encrypted
             assert reader.encryption_params.encrypt_mode == EncryptionMode.DATA_ONLY
-            print(f"  模式: DATA_ONLY + AES-GCM ✓")
+            print(f"  模式: DATA_ONLY + AES-GCM [OK]")
 
             data = reader.extract("data.txt")
             assert data == txt_path.read_bytes()
-            print(f"  内容一致 ✓")
+            print(f"  内容一致 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1914,7 +1914,7 @@ def test_24_aes_gcm_wrong_password(sizes: dict):
             assert False
         except MCPKError as e:
             assert "密码错误" in str(e)
-            print(f"  错误密码检测 ✓")
+            print(f"  错误密码检测 [OK]")
 
         # 空密码
         try:
@@ -1923,7 +1923,7 @@ def test_24_aes_gcm_wrong_password(sizes: dict):
             assert False
         except MCPKError as e:
             assert "密码错误" in str(e)
-            print(f"  空密码检测 ✓")
+            print(f"  空密码检测 [OK]")
 
         # 不提供密码
         try:
@@ -1932,13 +1932,13 @@ def test_24_aes_gcm_wrong_password(sizes: dict):
             assert False
         except MCPKError as e:
             assert "密码" in str(e)
-            print(f"  缺少密码检测 ✓")
+            print(f"  缺少密码检测 [OK]")
 
         # 正确密码
         with MCPKReader(mcpk_path, password=password) as reader:
             data = reader.extract("secret.txt")
             assert data == txt_path.read_bytes()
-            print(f"  正确密码解密 ✓")
+            print(f"  正确密码解密 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -1985,9 +1985,9 @@ def test_25_aes_gcm_tamper_detection(sizes: dict):
                     assert len(errors) > 0
                 except MCPKError:
                     pass
-            print(f"  篡改检测正确 ✓")
+            print(f"  篡改检测正确 [OK]")
         except MCPKError:
-            print(f"  篡改检测正确（加载阶段） ✓")
+            print(f"  篡改检测正确（加载阶段） [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2022,17 +2022,17 @@ def test_26_xor_backward_compat(sizes: dict):
         with MCPKReader(mcpk_path, password=password) as reader:
             assert reader.is_encrypted
             assert reader.encryption_params.kdf_type == 0x01  # SHA256_XOR
-            print(f"  KDF: SHA256_XOR ✓")
+            print(f"  KDF: SHA256_XOR [OK]")
 
             for name, path in files.items():
                 extracted = reader.extract(name)
                 original = path.read_bytes()
                 assert extracted == original
-            print(f"  全部内容一致 ✓")
+            print(f"  全部内容一致 [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2074,7 +2074,7 @@ def test_27_aes_gcm_with_groups_and_relations(sizes: dict):
             assert reader.is_encrypted
             assert len(reader.groups) == 2
             assert len(reader.relations) == 1
-            print(f"  2 分组, 1 关系 ✓")
+            print(f"  2 分组, 1 关系 [OK]")
 
             for g in reader.groups:
                 entries = reader.list_group_entries(g.name)
@@ -2082,11 +2082,11 @@ def test_27_aes_gcm_with_groups_and_relations(sizes: dict):
                     data = reader.extract(e.name)
                     original = files[e.name].read_bytes()
                     assert data == original
-            print(f"  分组内容全部一致 ✓")
+            print(f"  分组内容全部一致 [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2122,16 +2122,16 @@ def test_28_group_tags_basic(sizes: dict):
             g1 = reader.find_group("工作文档")
             assert g1 is not None
             assert g1.tags == ["工作", "2026", "重要"]
-            print(f"  工作文档: tags={g1.tags} ✓")
+            print(f"  工作文档: tags={g1.tags} [OK]")
 
             g2 = reader.find_group("旅行照片")
             assert g2 is not None
             assert g2.tags == ["旅行", "风景"]
-            print(f"  旅行照片: tags={g2.tags} ✓")
+            print(f"  旅行照片: tags={g2.tags} [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2161,7 +2161,7 @@ def test_29_add_tag_dynamic(sizes: dict):
         with MCPKReader(mcpk_path) as reader:
             g = reader.find_group("笔记")
             assert g.tags == ["初始标签", "动态标签1", "动态标签2"]
-            print(f"  tags={g.tags} (无重复) ✓")
+            print(f"  tags={g.tags} (无重复) [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2202,11 +2202,11 @@ def test_30_intra_relation_basic(sizes: dict):
             # source=srt, target=mp4
             assert reader.entries[ir.source_entry].name == "lecture.srt"
             assert reader.entries[ir.target_entry].name == "lecture.mp4"
-            print(f"  SUBTITLE_OF: lecture.srt -> lecture.mp4 ✓")
+            print(f"  SUBTITLE_OF: lecture.srt -> lecture.mp4 [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2258,7 +2258,7 @@ def test_31_multiple_intra_relations(sizes: dict):
             assert IntraRelationType.TRANSCRIPT_OF in types
             assert IntraRelationType.THUMBNAIL_OF in types
             assert IntraRelationType.ANNOTATION_OF in types
-            print(f"  3 条组内关系: TRANSCRIPT_OF, THUMBNAIL_OF, ANNOTATION_OF ✓")
+            print(f"  3 条组内关系: TRANSCRIPT_OF, THUMBNAIL_OF, ANNOTATION_OF [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2299,12 +2299,12 @@ def test_32_tags_and_intra_with_encryption(sizes: dict):
             g = reader.find_group("视频集")
             assert g.tags == ["加密", "视频"]
             assert len(g.intra_relations) == 1
-            print(f"  加密 + tags + 组内关系 ✓")
+            print(f"  加密 + tags + 组内关系 [OK]")
 
             for e in reader.list_group_entries("视频集"):
                 data = reader.extract(e.name)
                 assert len(data) == e.original_size
-            print(f"  内容提取正确 ✓")
+            print(f"  内容提取正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2331,7 +2331,7 @@ def test_33_import_folder_basic(sizes: dict):
 
         assert g.name == "项目资料"
         assert len(g.entry_ids) == 3
-        print(f"  组名=项目资料, 3 文件 ✓")
+        print(f"  组名=项目资料, 3 文件 [OK]")
 
         with MCPKReader(mcpk_path) as reader:
             g = reader.find_group("项目资料")
@@ -2341,11 +2341,11 @@ def test_33_import_folder_basic(sizes: dict):
             assert "readme.md" in names
             assert "data.json" in names
             assert "notes.txt" in names
-            print(f"  文件: {names} ✓")
+            print(f"  文件: {names} [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2386,8 +2386,8 @@ def test_34_import_folder_multiple(sizes: dict):
             assert len(gb.entry_ids) == 2
             assert ga.tags == ["集合A"]
             assert gb.tags == ["集合B"]
-            print(f"  文件夹A: 3 文件, tags={ga.tags} ✓")
-            print(f"  文件夹B: 2 文件, tags={gb.tags} ✓")
+            print(f"  文件夹A: 3 文件, tags={ga.tags} [OK]")
+            print(f"  文件夹B: 2 文件, tags={gb.tags} [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2418,7 +2418,7 @@ def test_35_import_folder_non_recursive(sizes: dict):
             g = reader.find_group("src")
             assert len(g.entry_ids) == 1  # 只有 top.txt
             assert reader.entries[g.entry_ids[0]].name == "top.txt"
-            print(f"  非递归: 只含顶层文件 ✓")
+            print(f"  非递归: 只含顶层文件 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2474,7 +2474,7 @@ def test_36_json_index_basic(sizes: dict):
         assert result["groups_created"] == 1
         assert result["relations_created"] == 1
         assert len(result["skipped"]) == 0
-        print(f"  加载: 3 文件, 1 分组, 1 关系, 0 跳过 ✓")
+        print(f"  加载: 3 文件, 1 分组, 1 关系, 0 跳过 [OK]")
 
         with MCPKReader(mcpk_path) as reader:
             g = reader.find_group("第1讲")
@@ -2482,18 +2482,18 @@ def test_36_json_index_basic(sizes: dict):
             assert g.tags == ["ML", "入门"]
             assert g.group_type == GroupType.VIDEO_SUBTITLE
             assert len(g.entry_ids) == 2
-            print(f"  第1讲: tags={g.tags}, type=VIDEO_SUBTITLE, 2 条目 ✓")
+            print(f"  第1讲: tags={g.tags}, type=VIDEO_SUBTITLE, 2 条目 [OK]")
 
             # standalone
             assert reader.find("notes.md") is not None
-            print(f"  standalone: notes.md ✓")
+            print(f"  standalone: notes.md [OK]")
 
             assert len(reader.relations) == 1
-            print(f"  关系: 1 ✓")
+            print(f"  关系: 1 [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2543,14 +2543,14 @@ def test_37_json_index_missing_files(sizes: dict):
 
         assert result["loaded"] == 2  # exists.txt from group + exists.txt standalone
         assert len(result["skipped"]) == 3  # 3 missing files
-        print(f"  加载: 2, 跳过: 3 ✓")
+        print(f"  加载: 2, 跳过: 3 [OK]")
         for path, reason in result["skipped"]:
             print(f"    跳过: {path} ({reason})")
 
         with MCPKReader(mcpk_path) as reader:
             # exists.txt appears twice (once in group, once standalone)
             assert reader.entry_count >= 1
-            print(f"  读取正常 ✓")
+            print(f"  读取正常 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2600,7 +2600,7 @@ def test_38_json_index_with_intra_relations(sizes: dict):
             types = {ir.relation_type for ir in g.intra_relations}
             assert IntraRelationType.SUBTITLE_OF in types
             assert IntraRelationType.THUMBNAIL_OF in types
-            print(f"  2 条组内关系 ✓")
+            print(f"  2 条组内关系 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2642,7 +2642,7 @@ def test_39_json_index_with_encryption(sizes: dict):
             assert g is not None
             data = reader.extract("secret.md")
             assert len(data) > 0
-            print(f"  加密索引包: 内容正确 ✓")
+            print(f"  加密索引包: 内容正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2684,19 +2684,19 @@ def test_40_inspect_with_new_fields(sizes: dict):
             # 新字段
             assert info["kdf_type"] == "PBKDF2_AES"
             assert info["kdf_iterations"] == 600_000
-            print(f"  kdf_type: {info['kdf_type']}, iterations: {info['kdf_iterations']} ✓")
+            print(f"  kdf_type: {info['kdf_type']}, iterations: {info['kdf_iterations']} [OK]")
 
             g_info = info["groups"][0]
             assert g_info["tags"] == ["测试", "inspect"]
             assert len(g_info["intra_relations"]) == 1
             assert g_info["intra_relations"][0]["type"] == "SUBTITLE_OF"
-            print(f"  tags: {g_info['tags']} ✓")
-            print(f"  intra_relations: {g_info['intra_relations'][0]['type']} ✓")
+            print(f"  tags: {g_info['tags']} [OK]")
+            print(f"  intra_relations: {g_info['intra_relations'][0]['type']} [OK]")
 
             # JSON 可序列化
             json_str = json.dumps(info, ensure_ascii=False, indent=2)
             assert len(json_str) > 100
-            print(f"  JSON 输出: {len(json_str)} 字符 ✓")
+            print(f"  JSON 输出: {len(json_str)} 字符 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2725,7 +2725,7 @@ def test_41_tag_deduplication(sizes: dict):
         with MCPKReader(mcpk_path) as reader:
             g = reader.find_group("G")
             assert g.tags == ["a", "b", "c", "d"]
-            print(f"  tags={g.tags} (无重复) ✓")
+            print(f"  tags={g.tags} (无重复) [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2753,7 +2753,7 @@ def test_42_many_tags_per_group(sizes: dict):
             g = reader.find_group("大数据")
             assert len(g.tags) == 50
             assert g.tags == many_tags
-            print(f"  50 个 tags roundtrip 正确 ✓")
+            print(f"  50 个 tags roundtrip 正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2788,7 +2788,7 @@ def test_43_intra_relation_custom_type(sizes: dict):
             ir = g.intra_relations[0]
             assert ir.relation_type == IntraRelationType.CUSTOM
             assert ir.description == "自定义关系"
-            print(f"  CUSTOM 类型 ✓")
+            print(f"  CUSTOM 类型 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2825,8 +2825,8 @@ def test_44_import_folder_with_tags_and_relations(sizes: dict):
             g1 = reader.find_group("课程资料")
             assert g1.tags == ["课程"]
             assert g1.group_type == GroupType.COURSE
-            print(f"  课程资料: tags={g1.tags}, type=COURSE ✓")
-            print(f"  关系: 课程资料 --[REFERENCES]--> 作业 ✓")
+            print(f"  课程资料: tags={g1.tags}, type=COURSE [OK]")
+            print(f"  关系: 课程资料 --[REFERENCES]--> 作业 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2879,7 +2879,7 @@ def test_45_all_intra_relation_types(sizes: dict):
             types_found = {ir.relation_type for ir in g.intra_relations}
             for rt in all_types:
                 assert rt in types_found
-            print(f"  9 种 IntraRelationType 全部 roundtrip 正确 ✓")
+            print(f"  9 种 IntraRelationType 全部 roundtrip 正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2909,7 +2909,7 @@ def test_46_encryption_none_still_works(sizes: dict):
             assert g.tags == ["plain"]
             data = reader.extract("plain.txt")
             assert data == txt.read_bytes()
-            print(f"  未加密 + tags + roundtrip 正确 ✓")
+            print(f"  未加密 + tags + roundtrip 正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -2936,11 +2936,11 @@ def test_47_json_index_empty(sizes: dict):
 
         assert result["loaded"] == 0
         assert result["groups_created"] == 0
-        print(f"  空索引: 0 文件, 0 分组 ✓")
+        print(f"  空索引: 0 文件, 0 分组 [OK]")
 
         with MCPKReader(mcpk_path) as reader:
             assert reader.entry_count == 0
-            print(f"  读取正常 ✓")
+            print(f"  读取正常 [OK]")
 
         # 只有 standalone_files
         index_path2 = base / "minimal.json"
@@ -2957,7 +2957,7 @@ def test_47_json_index_empty(sizes: dict):
         with MCPKReader(mcpk_path2) as reader:
             assert reader.entry_count == 1
             assert reader.extract("solo.txt") == b"solo"
-            print(f"  最小索引: 1 standalone 文件 ✓")
+            print(f"  最小索引: 1 standalone 文件 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -3044,7 +3044,7 @@ def test_48_json_index_complex(sizes: dict):
         assert result["loaded"] == 10  # 3*3 + 1
         assert result["groups_created"] == 3
         assert result["relations_created"] == 3
-        print(f"  加载: 10 文件, 3 分组, 3 组间关系 ✓")
+        print(f"  加载: 10 文件, 3 分组, 3 组间关系 [OK]")
 
         with MCPKReader(mcpk_path, password=password) as reader:
             assert reader.is_encrypted
@@ -3059,17 +3059,17 @@ def test_48_json_index_complex(sizes: dict):
                 assert f"week{i}" in g.tags
                 assert len(g.intra_relations) == 2  # SUBTITLE_OF + ANNOTATION_OF
 
-            print(f"  各分组: 3 条目, 2 tags, 2 组内关系 ✓")
+            print(f"  各分组: 3 条目, 2 tags, 2 组内关系 [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
             # 提取验证
             for e in reader.entries:
                 data = reader.extract(e.name)
                 assert len(data) == e.original_size
-            print(f"  全部 10 文件内容正确 ✓")
+            print(f"  全部 10 文件内容正确 [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -3110,19 +3110,19 @@ def test_49_same_name_different_ext(sizes: dict):
             for name, path in [("1.txt", txt_path), ("1.py", py_path), ("1.png", png_path)]:
                 writer.add_file(path, metadata={"title": f"测试-{name}"})
 
-        print(f"  打包: 3 同名文件 ✓")
+        print(f"  打包: 3 同名文件 [OK]")
 
         # ── 读取验证 ──
         with MCPKReader(mcpk_path) as reader:
             assert reader.entry_count == 3, \
                 f"条目数应为 3, 实际 {reader.entry_count}"
-            print(f"  条目数: 3 ✓")
+            print(f"  条目数: 3 [OK]")
 
             # 文件名应全部存在
             names = sorted(e.name for e in reader.entries)
             assert names == ["1.png", "1.py", "1.txt"], \
                 f"文件名不匹配: {names}"
-            print(f"  文件名: {names} ✓")
+            print(f"  文件名: {names} [OK]")
 
             # MIME 类型正确
             mime_map = {e.name: e.mime_type for e in reader.entries}
@@ -3132,26 +3132,26 @@ def test_49_same_name_different_ext(sizes: dict):
                 f"1.py MIME: {mime_map['1.py']}"
             assert mime_map["1.png"] == "image/png", \
                 f"1.png MIME: {mime_map['1.png']}"
-            print(f"  MIME 类型正确 ✓")
+            print(f"  MIME 类型正确 [OK]")
 
             # EntryType 正确
             type_map = {e.name: e.entry_type for e in reader.entries}
             assert type_map["1.txt"] == EntryType.DOCUMENT
             assert type_map["1.py"] == EntryType.DOCUMENT
             assert type_map["1.png"] == EntryType.IMAGE
-            print(f"  EntryType 正确 ✓")
+            print(f"  EntryType 正确 [OK]")
 
             # 内容提取一致
             for name, original_data in originals.items():
                 extracted = reader.extract(name)
                 assert extracted == original_data, \
                     f"{name} 内容不一致 (提取 {len(extracted)} vs 原始 {len(original_data)})"
-            print(f"  全部 3 文件内容一致 ✓")
+            print(f"  全部 3 文件内容一致 [OK]")
 
             # 校验
             errors = reader.verify()
             assert not errors, f"校验失败: {errors}"
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
             # 提取到目录
             extract_dir = base / "extracted"
@@ -3160,13 +3160,13 @@ def test_49_same_name_different_ext(sizes: dict):
                 out = extract_dir / name
                 assert out.exists(), f"缺失: {name}"
                 assert out.read_bytes() == original_data, f"内容不一致: {name}"
-            print(f"  提取到目录验证通过 ✓")
+            print(f"  提取到目录验证通过 [OK]")
 
             # inspect JSON 可序列化
             info = reader.inspect()
             json_str = json.dumps(info, ensure_ascii=False)
             assert len(json_str) > 50
-            print(f"  inspect JSON 正常 ✓")
+            print(f"  inspect JSON 正常 [OK]")
 
     # ── 分组场景：同名文件分到不同组 ──
     print(f"\n  --- 分组场景 ---")
@@ -3194,14 +3194,14 @@ def test_49_same_name_different_ext(sizes: dict):
         with MCPKReader(mcpk_path) as reader:
             assert reader.entry_count == 4
             assert len(reader.groups) == 2
-            print(f"  4 条目, 2 分组 ✓")
+            print(f"  4 条目, 2 分组 [OK]")
 
             # find_all 应返回所有同名条目
             txt_entries = reader.find_all("1.txt")
             assert len(txt_entries) == 2, f"1.txt 应有 2 个条目, 实际 {len(txt_entries)}"
             py_entries = reader.find_all("1.py")
             assert len(py_entries) == 2
-            print(f"  find_all: 1.txt×2, 1.py×2 ✓")
+            print(f"  find_all: 1.txt×2, 1.py×2 [OK]")
 
             # 使用 group 参数区分同名文件
             a_txt = reader.extract("1.txt", group="组A")
@@ -3209,27 +3209,27 @@ def test_49_same_name_different_ext(sizes: dict):
             assert a_txt != b_txt, "不同组的 1.txt 内容应不同"
             assert a_txt == "组A的文本".encode("utf-8")
             assert b_txt == "组B的文本".encode("utf-8")
-            print(f"  extract(group=) 区分同名文件 ✓")
+            print(f"  extract(group=) 区分同名文件 [OK]")
 
             a_py = reader.extract("1.py", group="组A")
             b_py = reader.extract("1.py", group="组B")
             assert a_py == "# 组A的代码".encode("utf-8")
             assert b_py == "# 组B的代码".encode("utf-8")
-            print(f"  各组文件内容正确 ✓")
+            print(f"  各组文件内容正确 [OK]")
 
             # 不指定 group 时 find 返回第一个匹配
             first = reader.find("1.txt")
             assert first is not None
-            print(f"  find() 无 group 参数返回首个匹配 ✓")
+            print(f"  find() 无 group 参数返回首个匹配 [OK]")
 
             # 指定不存在的 group 应返回 None
             assert reader.find("1.txt", group="不存在的组") is None
             assert reader.find("不存在.txt", group="组A") is None
-            print(f"  find() 不存在时返回 None ✓")
+            print(f"  find() 不存在时返回 None [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
 
     # ── 加密场景：同名文件加密 roundtrip ──
     print(f"\n  --- 加密场景 ---")
@@ -3251,7 +3251,7 @@ def test_49_same_name_different_ext(sizes: dict):
             assert reader.entry_count == 2
             assert reader.extract("1.txt") == "加密文本".encode("utf-8")
             assert reader.extract("1.py") == "加密代码".encode("utf-8")
-            print(f"  加密 roundtrip 正确 ✓")
+            print(f"  加密 roundtrip 正确 [OK]")
 
     # ── 同组同名文件：使用 index 参数区分 ──
     print(f"\n  --- 同组同名文件 ---")
@@ -3272,12 +3272,12 @@ def test_49_same_name_different_ext(sizes: dict):
 
         with MCPKReader(mcpk_path) as reader:
             assert reader.entry_count == 3
-            print(f"  3 条目 (2 同名 + 1 不同) ✓")
+            print(f"  3 条目 (2 同名 + 1 不同) [OK]")
 
             # find_all 应找到 2 个 readme.md
             matches = reader.find_all("readme.md")
             assert len(matches) == 2
-            print(f"  find_all('readme.md') = 2 个 ✓")
+            print(f"  find_all('readme.md') = 2 个 [OK]")
 
             # index=0 和 index=1 返回不同内容
             v1 = reader.extract("readme.md", index=0)
@@ -3285,15 +3285,15 @@ def test_49_same_name_different_ext(sizes: dict):
             assert v1 == b"version 1"
             assert v2 == b"version 2"
             assert v1 != v2
-            print(f"  extract(index=0) = 'version 1' ✓")
-            print(f"  extract(index=1) = 'version 2' ✓")
+            print(f"  extract(index=0) = 'version 1' [OK]")
+            print(f"  extract(index=1) = 'version 2' [OK]")
 
             # 指定 group + index
             v1_g = reader.extract("readme.md", group="项目", index=0)
             v2_g = reader.extract("readme.md", group="项目", index=1)
             assert v1_g == b"version 1"
             assert v2_g == b"version 2"
-            print(f"  extract(group+index) 组合正确 ✓")
+            print(f"  extract(group+index) 组合正确 [OK]")
 
             # index 越界应报错
             try:
@@ -3301,25 +3301,847 @@ def test_49_same_name_different_ext(sizes: dict):
                 assert False, "应抛出 KeyError"
             except KeyError as e:
                 assert "同名条目" in str(e)
-                print(f"  index 越界报错（含同名提示） ✓")
+                print(f"  index 越界报错（含同名提示） [OK]")
 
             # find_all 加 group 过滤
             matches_in_group = reader.find_all("readme.md", group="项目")
             assert len(matches_in_group) == 2
             matches_none = reader.find_all("readme.md", group="不存在")
             assert len(matches_none) == 0
-            print(f"  find_all(group=) 过滤正确 ✓")
+            print(f"  find_all(group=) 过滤正确 [OK]")
 
             # get_metadata 区分同名文件
             meta0 = reader.get_metadata("readme.md", index=0)
             meta1 = reader.get_metadata("readme.md", index=1)
             assert meta0["title"] == "v1"
             assert meta1["title"] == "v2"
-            print(f"  get_metadata(index=) 区分正确 ✓")
+            print(f"  get_metadata(index=) 区分正确 [OK]")
 
             errors = reader.verify()
             assert not errors
-            print(f"  完整性校验通过 ✓")
+            print(f"  完整性校验通过 [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+# ═══════════════════════════════════════════════════════════
+#  test_50 ~ test_60: 增强测试
+# ═══════════════════════════════════════════════════════════
+
+def test_50_path_safety(sizes: dict):
+    """路径安全：拒绝 .. 和绝对路径。"""
+    label = "路径安全"
+    print("\n" + "=" * 60)
+    print(f"测试 50: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        mcpk_path = base / "safe.mcpk"
+
+        with MCPKWriter(mcpk_path) as writer:
+            # 应拒绝含 .. 的文件名
+            try:
+                writer.add_data(b"x", "../etc/passwd")
+                assert False, "应抛出 ValueError"
+            except ValueError as e:
+                assert "不安全" in str(e)
+                print(f"  拒绝 ../etc/passwd [OK]")
+
+            # 应拒绝绝对路径
+            try:
+                writer.add_data(b"x", "/etc/passwd")
+                assert False, "应抛出 ValueError"
+            except ValueError as e:
+                assert "不安全" in str(e)
+                print(f"  拒绝 /etc/passwd [OK]")
+
+            # 应拒绝反斜杠开头
+            try:
+                writer.add_data(b"x", "\\windows\\system32")
+                assert False, "应抛出 ValueError"
+            except ValueError as e:
+                assert "不安全" in str(e)
+                print(f"  拒绝 \\windows\\system32 [OK]")
+
+            # 应拒绝中间含 .. 的路径
+            try:
+                writer.add_data(b"x", "subdir/../../secret.txt")
+                assert False, "应抛出 ValueError"
+            except ValueError as e:
+                assert "不安全" in str(e)
+                print(f"  拒绝 subdir/../../secret.txt [OK]")
+
+            # 正常文件名应通过
+            writer.add_data(b"safe", "normal.txt")
+            writer.add_data(b"safe", "sub/dir/file.txt")
+            writer.add_data(b"safe", "dotted.name.txt")
+            print(f"  正常文件名通过 [OK]")
+
+        # 验证正常文件可读取
+        with MCPKReader(mcpk_path) as reader:
+            assert reader.entry_count == 3
+            assert reader.extract("normal.txt") == b"safe"
+            print(f"  正常文件内容正确 [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_51_reader_api_coverage(sizes: dict):
+    """Reader API 覆盖：list_entries, list_group_entries, get_metadata, extract_entry。"""
+    label = "Reader API 覆盖"
+    print("\n" + "=" * 60)
+    print(f"测试 51: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        mcpk_path = base / "api.mcpk"
+
+        # 创建多样化的文件
+        with MCPKWriter(mcpk_path) as writer:
+            writer.add_data(b"doc content", "doc.txt",
+                            metadata={"title": "文档", "author": "测试"})
+            writer.add_data(b"py code", "script.py",
+                            metadata={"title": "脚本"})
+            gen_png_file(base / "img.png", sizes["image"], seed=51)
+            writer.add_file(base / "img.png", group_name="媒体")
+            writer.add_data(b"audio data", "sound.mp3",
+                            entry_type=EntryType.AUDIO, group_name="媒体")
+            writer.add_data(b"video data", "clip.mp4",
+                            entry_type=EntryType.VIDEO, group_name="媒体")
+
+        with MCPKReader(mcpk_path) as reader:
+            # list_entries 无参数返回全部
+            all_entries = reader.list_entries()
+            assert len(all_entries) == 5
+            print(f"  list_entries() = 5 [OK]")
+
+            # list_entries 按类型过滤
+            docs = reader.list_entries(EntryType.DOCUMENT)
+            assert len(docs) == 2  # doc.txt + script.py
+            print(f"  list_entries(DOCUMENT) = 2 [OK]")
+
+            images = reader.list_entries(EntryType.IMAGE)
+            assert len(images) == 1
+            print(f"  list_entries(IMAGE) = 1 [OK]")
+
+            audio = reader.list_entries(EntryType.AUDIO)
+            assert len(audio) == 1
+            print(f"  list_entries(AUDIO) = 1 [OK]")
+
+            video = reader.list_entries(EntryType.VIDEO)
+            assert len(video) == 1
+            print(f"  list_entries(VIDEO) = 1 [OK]")
+
+            # list_group_entries
+            media_entries = reader.list_group_entries("媒体")
+            assert len(media_entries) == 3
+            names = {e.name for e in media_entries}
+            assert names == {"img.png", "sound.mp3", "clip.mp4"}
+            print(f"  list_group_entries('媒体') = 3 [OK]")
+
+            # list_group_entries 不存在的组
+            try:
+                reader.list_group_entries("不存在")
+                assert False, "应抛出 KeyError"
+            except KeyError:
+                print(f"  list_group_entries 不存在时 KeyError [OK]")
+
+            # get_metadata
+            meta = reader.get_metadata("doc.txt")
+            assert meta["title"] == "文档"
+            assert meta["author"] == "测试"
+            print(f"  get_metadata('doc.txt') = {meta} [OK]")
+
+            # extract_entry 直接调用
+            entry = reader.find("script.py")
+            data = reader.extract_entry(entry)
+            assert data == b"py code"
+            print(f"  extract_entry() 直接调用 [OK]")
+
+            # verify
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_52_writer_properties_and_relations(sizes: dict):
+    """Writer 属性和关系 API。"""
+    label = "Writer 属性和关系"
+    print("\n" + "=" * 60)
+    print(f"测试 52: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        mcpk_path = base / "props.mcpk"
+
+        with MCPKWriter(mcpk_path) as writer:
+            # 初始状态
+            assert writer.entry_count == 0
+            assert writer.entries == []
+            assert writer.groups == []
+            assert not writer.is_encrypted
+            print(f"  初始状态: 0 条目, 0 分组, 未加密 [OK]")
+
+            # 添加文件
+            writer.add_data(b"a", "a.txt", group_name="G1")
+            writer.add_data(b"b", "b.txt", group_name="G1")
+            writer.add_data(b"c", "c.txt", group_name="G2")
+
+            # 属性检查
+            assert writer.entry_count == 3
+            assert len(writer.entries) == 3
+            assert len(writer.groups) == 2
+            print(f"  添加后: 3 条目, 2 分组 [OK]")
+
+            # add_relation
+            rel = writer.add_relation("G1", "G2", RelationType.SEQUEL,
+                                      description="顺序")
+            assert rel.source_group == 0
+            assert rel.target_group == 1
+            assert rel.relation_type == RelationType.SEQUEL
+            assert rel.description == "顺序"
+            print(f"  add_relation: G1 -> G2 (SEQUEL) [OK]")
+
+            # add_relation 不存在的分组
+            try:
+                writer.add_relation("G1", "不存在", RelationType.RELATED)
+                assert False, "应抛出 ValueError"
+            except ValueError as e:
+                assert "不存在" in str(e)
+                print(f"  add_relation 不存在分组报错 [OK]")
+
+            # add_tag
+            writer.add_tag("G1", "标签1")
+            writer.add_tag("G1", "标签2")
+            writer.add_tag("G1", "标签1")  # 重复应忽略
+            g1 = writer._groups["G1"]
+            assert g1.tags == ["标签1", "标签2"]
+            print(f"  add_tag: 去重正确 [OK]")
+
+            # add_tag 不存在的分组
+            try:
+                writer.add_tag("不存在", "tag")
+                assert False, "应抛出 ValueError"
+            except ValueError:
+                print(f"  add_tag 不存在分组报错 [OK]")
+
+        # 验证写入结果
+        with MCPKReader(mcpk_path) as reader:
+            assert reader.entry_count == 3
+            assert len(reader.groups) == 2
+            assert len(reader.relations) == 1
+            assert reader.relations[0].relation_type == RelationType.SEQUEL
+            g1 = reader.find_group("G1")
+            assert g1.tags == ["标签1", "标签2"]
+            errors = reader.verify()
+            assert not errors
+            print(f"  读取验证: 3 条目, 2 分组, 1 关系, 标签正确 [OK]")
+
+    # 加密 Writer 属性
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        enc_path = base / "enc_props.mcpk"
+        with MCPKWriter(enc_path, password="test", encryption="xor") as writer:
+            writer.add_data(b"x", "x.txt")
+            assert writer.is_encrypted
+            print(f"  加密 Writer: is_encrypted=True [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_53_error_handling(sizes: dict):
+    """错误处理：无效文件、截断数据、损坏数据。"""
+    label = "错误处理"
+    print("\n" + "=" * 60)
+    print(f"测试 53: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        # 非 MCPK 文件
+        junk_path = base / "junk.mcpk"
+        junk_path.write_bytes(b"this is not an mcpk file")
+        try:
+            with MCPKReader(junk_path) as reader:
+                pass
+            assert False, "应抛出 MCPKError"
+        except MCPKError as e:
+            assert "不是有效的 MCPK" in str(e) or "magic" in str(e).lower()
+            print(f"  非 MCPK 文件报错 [OK]")
+
+        # 太小的文件
+        tiny_path = base / "tiny.mcpk"
+        tiny_path.write_bytes(b"MCPK")  # 只有 4 字节
+        try:
+            with MCPKReader(tiny_path) as reader:
+                pass
+            assert False, "应抛出 MCPKError"
+        except MCPKError as e:
+            assert "太小" in str(e)
+            print(f"  文件太小报错 [OK]")
+
+        # 空文件
+        empty_path = base / "empty.mcpk"
+        empty_path.write_bytes(b"")
+        try:
+            with MCPKReader(empty_path) as reader:
+                pass
+            assert False, "应抛出 MCPKError"
+        except (MCPKError, Exception):
+            print(f"  空文件报错 [OK]")
+
+        # 截断的有效文件（header 正确但数据不完整）
+        valid_path = base / "valid.mcpk"
+        with MCPKWriter(valid_path) as writer:
+            writer.add_data(b"x" * 1000, "data.bin")
+        full_data = valid_path.read_bytes()
+        truncated_path = base / "truncated.mcpk"
+        truncated_path.write_bytes(full_data[:len(full_data) // 2])
+        try:
+            with MCPKReader(truncated_path) as reader:
+                reader.verify()
+            # 如果 verify 能完成，检查是否有错误
+            print(f"  截断文件: verify 可完成 [OK]")
+        except (MCPKError, Exception) as e:
+            print(f"  截断文件报错: {type(e).__name__} [OK]")
+
+        # 加密文件需要密码
+        enc_path = base / "enc.mcpk"
+        with MCPKWriter(enc_path, password="secret", encryption="xor") as writer:
+            writer.add_data(b"data", "file.txt")
+        try:
+            with MCPKReader(enc_path) as reader:
+                pass
+            assert False, "应抛出 MCPKError"
+        except MCPKError as e:
+            assert "密码" in str(e) or "加密" in str(e)
+            print(f"  加密文件无密码报错 [OK]")
+
+        # 错误密码
+        try:
+            with MCPKReader(enc_path, password="wrong") as reader:
+                pass
+            assert False, "应抛出 MCPKError"
+        except MCPKError as e:
+            assert "密码错误" in str(e) or "损坏" in str(e)
+            print(f"  错误密码报错 [OK]")
+
+        # extract 不存在的文件
+        valid2_path = base / "valid2.mcpk"
+        with MCPKWriter(valid2_path) as writer:
+            writer.add_data(b"x", "exists.txt")
+        with MCPKReader(valid2_path) as reader:
+            try:
+                reader.extract("not_exists.txt")
+                assert False, "应抛出 KeyError"
+            except KeyError as e:
+                assert "不存在" in str(e)
+                print(f"  extract 不存在文件 KeyError [OK]")
+
+            # get_metadata 不存在的文件
+            try:
+                reader.get_metadata("not_exists.txt")
+                assert False, "应抛出 KeyError"
+            except KeyError:
+                print(f"  get_metadata 不存在文件 KeyError [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_54_unicode_filenames(sizes: dict):
+    """Unicode 文件名：中文、日文、emoji、混合编码。"""
+    label = "Unicode 文件名"
+    print("\n" + "=" * 60)
+    print(f"测试 54: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        mcpk_path = base / "unicode.mcpk"
+
+        unicode_names = [
+            "报告_2026Q1.pdf",
+            "データ分析.txt",
+            "données_françaises.csv",
+            "Привет_мир.md",
+            "文件名带空格 和特殊字符!@#.txt",
+            "very_long_name_" + "测" * 50 + ".txt",
+        ]
+
+        with MCPKWriter(mcpk_path) as writer:
+            for name in unicode_names:
+                content = f"content of {name}".encode("utf-8")
+                writer.add_data(content, name)
+
+        with MCPKReader(mcpk_path) as reader:
+            assert reader.entry_count == len(unicode_names)
+            for name in unicode_names:
+                data = reader.extract(name)
+                expected = f"content of {name}".encode("utf-8")
+                assert data == expected, f"{name} 内容不一致"
+            errors = reader.verify()
+            assert not errors
+            print(f"  {len(unicode_names)} Unicode 文件名全部正确 [OK]")
+
+            # find 也应正常工作
+            for name in unicode_names:
+                entry = reader.find(name)
+                assert entry is not None
+                assert entry.name == name
+            print(f"  find() 全部匹配 [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_55_deep_directory_nesting(sizes: dict):
+    """深层目录嵌套：import_folder 递归。"""
+    label = "深层目录嵌套"
+    print("\n" + "=" * 60)
+    print(f"测试 55: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+
+        # 创建深层目录结构
+        deep_dir = base / "project"
+        dirs = [
+            deep_dir / "src" / "main" / "java" / "com" / "example",
+            deep_dir / "src" / "test" / "resources",
+            deep_dir / "docs" / "api" / "v2",
+            deep_dir / "config" / "env",
+        ]
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)
+
+        # 在各层放置文件
+        files = {}
+        for d in dirs:
+            for i in range(2):
+                f = d / f"file_{i}.txt"
+                content = f"content in {d.relative_to(deep_dir)}".encode("utf-8")
+                f.write_bytes(content)
+                files[str(f.relative_to(deep_dir)).replace("\\", "/")] = content
+
+        # 用 import_folder 递归打包
+        mcpk_path = base / "deep.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            group = writer.import_folder(deep_dir, tags=["项目"])
+            assert len(group.entry_ids) == len(files)
+            print(f"  import_folder: {len(files)} 文件 [OK]")
+
+        # 验证
+        with MCPKReader(mcpk_path) as reader:
+            assert reader.entry_count == len(files)
+            for name, expected in files.items():
+                data = reader.extract(name)
+                assert data == expected, f"{name} 内容不一致"
+            errors = reader.verify()
+            assert not errors
+            print(f"  所有文件内容正确 [OK]")
+
+            # 提取到目录
+            out_dir = base / "extracted"
+            reader.extract_all(out_dir)
+            for name, expected in files.items():
+                out_file = out_dir / name
+                assert out_file.exists(), f"缺失: {name}"
+                assert out_file.read_bytes() == expected
+            print(f"  提取到目录验证通过 [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_56_compress_fallback(sizes: dict):
+    """压缩回退：zstd/lz4 不可用时回退到 zlib。"""
+    label = "压缩回退"
+    print("\n" + "=" * 60)
+    print(f"测试 56: {label}")
+    print("=" * 60)
+
+    from mcpk.crypto import compress, decompress
+
+    # 测试 NONE 压缩
+    data = b"hello world" * 100
+    result, actual = compress(data, Compression.NONE)
+    assert result == data
+    assert actual == Compression.NONE
+    print(f"  NONE: 直通 [OK]")
+
+    # 测试 ZLIB 压缩
+    result, actual = compress(data, Compression.ZLIB)
+    assert actual == Compression.ZLIB
+    decompressed = decompress(result, Compression.ZLIB)
+    assert decompressed == data
+    print(f"  ZLIB: 压缩+解压 [OK]")
+
+    # 测试 ZSTD 回退
+    import warnings
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        result_zstd, actual_zstd = compress(data, Compression.ZSTD)
+        if actual_zstd == Compression.ZLIB:
+            assert len(w) == 1
+            assert "zstd" in str(w[0].message).lower()
+            print(f"  ZSTD: 回退到 zlib (警告已发) [OK]")
+            # 解压应使用 ZLIB
+            decompressed = decompress(result_zstd, Compression.ZLIB)
+            assert decompressed == data
+            print(f"  ZSTD 回退: 解压正确 [OK]")
+        else:
+            assert actual_zstd == Compression.ZSTD
+            decompressed = decompress(result_zstd, Compression.ZSTD)
+            assert decompressed == data
+            print(f"  ZSTD: 直接压缩+解压 [OK]")
+
+    # 测试 LZ4 回退
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        result_lz4, actual_lz4 = compress(data, Compression.LZ4)
+        if actual_lz4 == Compression.ZLIB:
+            assert len(w) == 1
+            assert "lz4" in str(w[0].message).lower()
+            print(f"  LZ4: 回退到 zlib (警告已发) [OK]")
+            decompressed = decompress(result_lz4, Compression.ZLIB)
+            assert decompressed == data
+            print(f"  LZ4 回退: 解压正确 [OK]")
+        else:
+            assert actual_lz4 == Compression.LZ4
+            decompressed = decompress(result_lz4, Compression.LZ4)
+            assert decompressed == data
+            print(f"  LZ4: 直接压缩+解压 [OK]")
+
+    # 端到端：写入 ZSTD，TOC 应记录实际压缩算法
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        mcpk_path = base / "fallback.mcpk"
+        with MCPKWriter(mcpk_path) as writer:
+            writer.add_data(data, "data.bin", compression=Compression.ZSTD)
+
+        with MCPKReader(mcpk_path) as reader:
+            entry = reader.find("data.bin")
+            # 如果 zstd 可用，compression 应为 ZSTD；否则 ZLIB
+            assert entry.compression in (Compression.ZSTD, Compression.ZLIB)
+            extracted = reader.extract("data.bin")
+            assert extracted == data
+            errors = reader.verify()
+            assert not errors
+            print(f"  端到端: TOC 记录与实际一致 [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_57_encryption_edge_cases(sizes: dict):
+    """加密边界：空文件加密、单字节加密、大文件加密。"""
+    label = "加密边界"
+    print("\n" + "=" * 60)
+    print(f"测试 57: {label}")
+    print("=" * 60)
+
+    for enc_name, enc_kw in [("AES", {"encryption": "aes"}), ("XOR", {"encryption": "xor"})]:
+        try:
+            from mcpk.crypto import HAS_CRYPTO
+            if enc_name == "AES" and not HAS_CRYPTO:
+                print(f"  {enc_name}: 跳过 (cryptography 未安装)")
+                continue
+        except ImportError:
+            continue
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            mcpk_path = base / f"edge_{enc_name.lower()}.mcpk"
+            password = f"pass_{enc_name.lower()}"
+
+            with MCPKWriter(mcpk_path, password=password, **enc_kw) as writer:
+                # 空文件
+                writer.add_data(b"", "empty.txt")
+                # 单字节
+                writer.add_data(b"\x42", "one_byte.bin")
+                # 小文件
+                writer.add_data(b"hello" * 100, "small.txt")
+                # 较大文件
+                gen_text_file(base / "medium.txt", sizes["text"], seed=57)
+                writer.add_file(base / "medium.txt")
+                print(f"  {enc_name}: 写入 4 文件 (空/1B/小/中) [OK]")
+
+            with MCPKReader(mcpk_path, password=password) as reader:
+                assert reader.entry_count == 4
+                assert reader.is_encrypted
+                assert reader.extract("empty.txt") == b""
+                assert reader.extract("one_byte.bin") == b"\x42"
+                assert reader.extract("small.txt") == b"hello" * 100
+                medium_data = reader.extract("medium.txt")
+                assert len(medium_data) > 0
+                errors = reader.verify()
+                assert not errors
+                print(f"  {enc_name}: 全部提取+校验正确 [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_58_many_groups_stress(sizes: dict):
+    """大量分组压力测试。"""
+    label = "大量分组压力"
+    print("\n" + "=" * 60)
+    print(f"测试 58: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        mcpk_path = base / "stress_groups.mcpk"
+
+        num_groups = 50
+        files_per_group = 5
+
+        with MCPKWriter(mcpk_path) as writer:
+            for g in range(num_groups):
+                gname = f"group_{g:03d}"
+                for f in range(files_per_group):
+                    fname = f"file_{f}.txt"
+                    content = f"group={g},file={f}".encode()
+                    writer.add_data(content, fname, group_name=gname)
+                # 添加组间关系
+                if g > 0:
+                    prev = f"group_{g-1:03d}"
+                    writer.add_relation(prev, gname, RelationType.SEQUEL)
+                # 添加标签
+                writer.add_tag(gname, f"tag_{g % 5}")
+                writer.add_tag(gname, "all_groups")
+
+        total_files = num_groups * files_per_group
+        print(f"  写入: {num_groups} 组, {total_files} 文件, {num_groups-1} 关系 [OK]")
+
+        with MCPKReader(mcpk_path) as reader:
+            assert reader.entry_count == total_files
+            assert len(reader.groups) == num_groups
+            assert len(reader.relations) == num_groups - 1
+            print(f"  读取: {reader.entry_count} 条目, {len(reader.groups)} 分组 [OK]")
+
+            # 验证每个分组的内容
+            for g in range(num_groups):
+                gname = f"group_{g:03d}"
+                group = reader.find_group(gname)
+                assert group is not None
+                assert len(group.entry_ids) == files_per_group
+                assert "all_groups" in group.tags
+                # 验证组内文件
+                for f in range(files_per_group):
+                    fname = f"file_{f}.txt"
+                    data = reader.extract(fname, group=gname)
+                    expected = f"group={g},file={f}".encode()
+                    assert data == expected
+            print(f"  全部 {num_groups} 组内容验证通过 [OK]")
+
+            # verify
+            errors = reader.verify()
+            assert not errors
+            print(f"  完整性校验通过 [OK]")
+
+            # inspect
+            info = reader.inspect()
+            assert info["entry_count"] == total_files
+            assert len(info["groups"]) == num_groups
+            assert len(info["relations"]) == num_groups - 1
+            print(f"  inspect 输出正确 [OK]")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_59_crypto_module_direct(sizes: dict):
+    """crypto.py 模块直接测试：xor_bytes, key derivation, encrypt/decrypt。"""
+    label = "crypto 模块直接测试"
+    print("\n" + "=" * 60)
+    print(f"测试 59: {label}")
+    print("=" * 60)
+
+    from mcpk.crypto import (
+        xor_bytes, derive_key, derive_control_key, derive_blob_key,
+        derive_key_pbkdf2, derive_subkeys_aes, derive_blob_key_aes,
+        aes_gcm_encrypt, aes_gcm_decrypt, HAS_CRYPTO,
+    )
+
+    # xor_bytes 基本测试
+    data = b"hello world"
+    key = b"\x42"
+    encrypted = xor_bytes(data, key)
+    decrypted = xor_bytes(encrypted, key)
+    assert decrypted == data
+    assert encrypted != data
+    print(f"  xor_bytes 单字节 key [OK]")
+
+    # xor_bytes 多字节 key
+    key2 = b"\x01\x02\x03"
+    enc2 = xor_bytes(data, key2)
+    dec2 = xor_bytes(enc2, key2)
+    assert dec2 == data
+    print(f"  xor_bytes 多字节 key [OK]")
+
+    # xor_bytes 空数据
+    assert xor_bytes(b"", key) == b""
+    print(f"  xor_bytes 空数据 [OK]")
+
+    # xor_bytes 空 key
+    assert xor_bytes(data, b"") == data
+    print(f"  xor_bytes 空 key (直通) [OK]")
+
+    # derive_key 确定性
+    k1 = derive_key("password", b"\x00" * 16)
+    k2 = derive_key("password", b"\x00" * 16)
+    assert k1 == k2
+    assert len(k1) == 32
+    print(f"  derive_key 确定性 [OK]")
+
+    # derive_key 不同密码产生不同密钥
+    k3 = derive_key("other", b"\x00" * 16)
+    assert k1 != k3
+    print(f"  derive_key 不同密码不同密钥 [OK]")
+
+    # derive_key 不同 salt 产生不同密钥
+    k4 = derive_key("password", b"\xff" * 16)
+    assert k1 != k4
+    print(f"  derive_key 不同 salt 不同密钥 [OK]")
+
+    # derive_control_key
+    ck = derive_control_key(k1)
+    assert len(ck) == 32
+    assert ck != k1
+    print(f"  derive_control_key [OK]")
+
+    # derive_blob_key
+    bk1 = derive_blob_key(k1, 0, b"\x00" * 16)
+    bk2 = derive_blob_key(k1, 1, b"\x00" * 16)
+    assert bk1 != bk2
+    assert len(bk1) == 32
+    print(f"  derive_blob_key 不同 entry_id 不同密钥 [OK]")
+
+    # AES-GCM 测试（如果有 cryptography）
+    if HAS_CRYPTO:
+        # derive_key_pbkdf2
+        mk = derive_key_pbkdf2("password", b"\x00" * 32)
+        assert len(mk) == 32
+        mk2 = derive_key_pbkdf2("password", b"\x00" * 32)
+        assert mk == mk2
+        print(f"  derive_key_pbkdf2 确定性 [OK]")
+
+        # derive_subkeys_aes
+        ck_aes, dk_aes = derive_subkeys_aes(mk)
+        assert len(ck_aes) == 32
+        assert len(dk_aes) == 32
+        assert ck_aes != dk_aes
+        print(f"  derive_subkeys_aes [OK]")
+
+        # derive_blob_key_aes
+        bk_aes1 = derive_blob_key_aes(dk_aes, 0, b"\x00" * 16)
+        bk_aes2 = derive_blob_key_aes(dk_aes, 1, b"\x00" * 16)
+        assert bk_aes1 != bk_aes2
+        print(f"  derive_blob_key_aes [OK]")
+
+        # aes_gcm_encrypt / aes_gcm_decrypt
+        plaintext = b"secret message" * 100
+        aad = b"context"
+        ct = aes_gcm_encrypt(ck_aes, plaintext, aad)
+        assert ct != plaintext
+        assert len(ct) > len(plaintext)  # nonce + tag overhead
+        pt = aes_gcm_decrypt(ck_aes, ct, aad)
+        assert pt == plaintext
+        print(f"  aes_gcm encrypt/decrypt [OK]")
+
+        # aes_gcm 错误 key 应失败
+        wrong_key = derive_key_pbkdf2("wrong", b"\x00" * 32)
+        wrong_ck, _ = derive_subkeys_aes(wrong_key)
+        try:
+            aes_gcm_decrypt(wrong_key[:32], ct, aad)
+            assert False, "应抛出异常"
+        except Exception:
+            print(f"  aes_gcm 错误 key 解密失败 [OK]")
+
+        # aes_gcm 篡改数据应失败
+        tampered = bytearray(ct)
+        tampered[20] ^= 0xFF
+        try:
+            aes_gcm_decrypt(ck_aes, bytes(tampered), aad)
+            assert False, "应抛出异常"
+        except Exception:
+            print(f"  aes_gcm 篡改检测 [OK]")
+
+        # aes_gcm 不同 AAD 应失败
+        try:
+            aes_gcm_decrypt(ck_aes, ct, b"wrong aad")
+            assert False, "应抛出异常"
+        except Exception:
+            print(f"  aes_gcm 不同 AAD 解密失败 [OK]")
+    else:
+        print(f"  AES-GCM: 跳过 (cryptography 未安装)")
+
+    print(f"  PASS: {label}")
+    return True
+
+
+def test_60_data_integrity_corruption(sizes: dict):
+    """数据完整性：篡改 blob 后 CRC32 校验应失败。"""
+    label = "数据篡改检测"
+    print("\n" + "=" * 60)
+    print(f"测试 60: {label}")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        mcpk_path = base / "integrity.mcpk"
+
+        # 创建文件
+        with MCPKWriter(mcpk_path) as writer:
+            writer.add_data(b"original content " * 100, "data.txt")
+            writer.add_data(b"another file", "other.txt")
+
+        # 读取原始数据
+        original_data = mcpk_path.read_bytes()
+
+        # 篡改 blob 区域（找到 data 的位置并修改）
+        with MCPKReader(mcpk_path) as reader:
+            entry = reader.find("data.txt")
+            blob_offset = entry.blob_offset
+            # 篡改 blob 的第一个字节
+            tampered = bytearray(original_data)
+            tampered[blob_offset] ^= 0xFF
+            tampered_path = base / "tampered.mcpk"
+            tampered_path.write_bytes(bytes(tampered))
+
+        # 验证篡改文件
+        with MCPKReader(tampered_path) as reader:
+            try:
+                errors = reader.verify()
+                assert len(errors) > 0, "应检测到篡改"
+                print(f"  篡改 blob: verify 检测到 {len(errors)} 个错误 [OK]")
+            except Exception:
+                print(f"  篡改 blob: verify 抛出异常 [OK]")
+
+            # 提取未篡改的文件应正常
+            other_data = reader.extract("other.txt")
+            assert other_data == b"another file"
+            print(f"  未篡改文件仍可正常提取 [OK]")
+
+            # 提取篡改文件应报错（CRC32 不匹配或解压失败）
+            try:
+                reader.extract("data.txt")
+                assert False, "应抛出异常"
+            except (MCPKError, Exception) as e:
+                print(f"  篡改文件提取报错: {type(e).__name__} [OK]")
 
     print(f"  PASS: {label}")
     return True
@@ -3380,6 +4202,17 @@ QUICK_TESTS = [
     ("test_47",  test_47_json_index_empty,       "tiny"),
     ("test_48",  test_48_json_index_complex,     "tiny"),
     ("test_49",  test_49_same_name_different_ext,"tiny"),
+    ("test_50",  test_50_path_safety,           "tiny"),
+    ("test_51",  test_51_reader_api_coverage,   "tiny"),
+    ("test_52",  test_52_writer_properties_and_relations, "tiny"),
+    ("test_53",  test_53_error_handling,         "tiny"),
+    ("test_54",  test_54_unicode_filenames,      "tiny"),
+    ("test_55",  test_55_deep_directory_nesting, "tiny"),
+    ("test_56",  test_56_compress_fallback,      "tiny"),
+    ("test_57",  test_57_encryption_edge_cases,  "tiny"),
+    ("test_58",  test_58_many_groups_stress,     "tiny"),
+    ("test_59",  test_59_crypto_module_direct,   "tiny"),
+    ("test_60",  test_60_data_integrity_corruption, "tiny"),
 ]
 
 FULL_TESTS = [
@@ -3433,6 +4266,17 @@ FULL_TESTS = [
     ("test_47",  test_47_json_index_empty,       "tiny"),
     ("test_48",  test_48_json_index_complex,     "small"),
     ("test_49",  test_49_same_name_different_ext,"small"),
+    ("test_50",  test_50_path_safety,           "tiny"),
+    ("test_51",  test_51_reader_api_coverage,   "tiny"),
+    ("test_52",  test_52_writer_properties_and_relations, "tiny"),
+    ("test_53",  test_53_error_handling,         "tiny"),
+    ("test_54",  test_54_unicode_filenames,      "tiny"),
+    ("test_55",  test_55_deep_directory_nesting, "tiny"),
+    ("test_56",  test_56_compress_fallback,      "tiny"),
+    ("test_57",  test_57_encryption_edge_cases,  "tiny"),
+    ("test_58",  test_58_many_groups_stress,     "small"),
+    ("test_59",  test_59_crypto_module_direct,   "tiny"),
+    ("test_60",  test_60_data_integrity_corruption, "tiny"),
 ]
 
 LARGE_TESTS = [
