@@ -1,9 +1,9 @@
 """MCPK v2 命令行工具。
 
 支持：
-- pack: 打包文件/目录（支持 --group 分组）
+- pack: 打包文件/目录（支持 --group 分组、--auto-group 自动分组、--index JSON 索引）
 - list: 列出条目（支持 --type video 过滤）
-- groups: 列出分组和关系
+- groups: 列出分组、标签、关系（含组内关系）
 - extract: 提取文件/分组
 - inspect: 检查详情
 - verify: 验证完整性
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .writer import MCPKWriter
 from .reader import MCPKReader, MCPKError
-from .constants import EntryType, GroupType, RelationType
+from .constants import EntryType, GroupType, RelationType, IntraRelationType
 
 
 def cmd_pack(args):
@@ -28,17 +28,47 @@ def cmd_pack(args):
     if not output.suffix:
         output = output.with_suffix(".mcpk")
 
+    password = getattr(args, 'password', None)
+    encrypt_mode = getattr(args, 'encrypt_mode', 'full') or 'full'
+    encryption = getattr(args, 'encryption', 'aes') or 'aes'
+
+    start = time.time()
+
+    # ── JSON 索引模式 ──
+    if hasattr(args, 'index') and args.index:
+        base_dir = getattr(args, 'base_dir', '.') or '.'
+        with MCPKWriter(output, password=password, encrypt_mode=encrypt_mode,
+                        encryption=encryption) as writer:
+            result = writer.load_index(args.index, base_dir=base_dir)
+            print(f"加载索引: {args.index}")
+            print(f"  加载: {result['loaded']} 文件")
+            if result['skipped']:
+                print(f"  跳过: {len(result['skipped'])} 文件")
+                for path, reason in result['skipped']:
+                    print(f"    - {path}: {reason}")
+            print(f"  创建分组: {result['groups_created']}")
+            print(f"  创建关系: {result['relations_created']}")
+
+        elapsed = time.time() - start
+        file_size = output.stat().st_size
+        print(f"\n打包完成: {output}")
+        print(f"  文件大小: {_fmt_size(file_size)}")
+        if password:
+            print(f"  加密: {encrypt_mode} ({encryption})")
+        print(f"  耗时: {elapsed:.2f}s")
+        return
+
+    # ── 普通模式 ──
     sources = [Path(p) for p in args.sources]
     for s in sources:
         if not s.exists():
             print(f"错误: 路径不存在: {s}", file=sys.stderr)
             sys.exit(1)
 
-    password = getattr(args, 'password', None)
-    encrypt_mode = getattr(args, 'encrypt_mode', 'full') or 'full'
+    auto_group = getattr(args, 'auto_group', False)
 
-    start = time.time()
-    with MCPKWriter(output, password=password, encrypt_mode=encrypt_mode) as writer:
+    with MCPKWriter(output, password=password, encrypt_mode=encrypt_mode,
+                    encryption=encryption) as writer:
         group_name = args.group if hasattr(args, 'group') and args.group else None
 
         for source in sources:
@@ -46,12 +76,18 @@ def cmd_pack(args):
                 entry = writer.add_file(source, group_name=group_name)
                 print(f"  + {entry.name} ({_fmt_size(entry.original_size)})")
             elif source.is_dir():
-                prefix = args.prefix or ""
-                entries = writer.add_directory(
-                    source, prefix=prefix, group_name=group_name
-                )
-                for e in entries:
-                    print(f"  + {e.name} ({_fmt_size(e.original_size)})")
+                if auto_group:
+                    # 每个目录自动创建同名分组
+                    group = writer.import_folder(source)
+                    count = len(group.entry_ids)
+                    print(f"  [{group.name}] {count} 文件")
+                else:
+                    prefix = args.prefix or ""
+                    entries = writer.add_directory(
+                        source, prefix=prefix, group_name=group_name
+                    )
+                    for e in entries:
+                        print(f"  + {e.name} ({_fmt_size(e.original_size)})")
             else:
                 print(f"跳过: {source}", file=sys.stderr)
 
@@ -61,7 +97,7 @@ def cmd_pack(args):
     print(f"  条目数: {writer.entry_count if hasattr(writer, '_entries') else '?'}")
     print(f"  文件大小: {_fmt_size(file_size)}")
     if writer.is_encrypted:
-        print(f"  加密: {encrypt_mode}")
+        print(f"  加密: {encrypt_mode} ({encryption})")
     print(f"  耗时: {elapsed:.2f}s")
 
 
@@ -89,7 +125,11 @@ def cmd_list(args):
                 print(f"文件: {reader.file_path}")
                 print(f"版本: v{reader.version}")
                 if reader.is_encrypted:
-                    print(f"加密: {reader.encryption_params.encrypt_mode if reader.encryption_params else 'unknown'}")
+                    enc_info = f"{reader.encryption_params.encrypt_mode}"
+                    if hasattr(reader.encryption_params, 'kdf_type'):
+                        from .constants import KdfType
+                        enc_info += f" ({KdfType(reader.encryption_params.kdf_type).name})"
+                    print(f"加密: {enc_info}")
                 print(f"条目数: {len(entries)}")
                 if reader.version >= 2:
                     print(f"分组数: {len(reader.groups)}")
@@ -111,7 +151,7 @@ def cmd_list(args):
 
 
 def cmd_groups(args):
-    """列出 .mcpk 文件中的分组和关系。"""
+    """列出 .mcpk 文件中的分组、标签和关系。"""
     try:
         password = getattr(args, 'password', None)
         with MCPKReader(args.file, password=password) as reader:
@@ -134,11 +174,34 @@ def cmd_groups(args):
                     0x04: "COURSE", 0x05: "MEETING",
                 }.get(group.group_type, "???")
                 print(f"  [{type_name}] {group.name} (ID={group.group_id}, {len(group.entry_ids)} 条目)")
-                for eid in group.entry_ids:
+
+                # 展示标签
+                if group.tags:
+                    print(f"    标签: {', '.join(group.tags)}")
+
+                # 展示条目（含组内关系标注）
+                intra_src_map = {}
+                for ir in group.intra_relations:
+                    intra_src_map.setdefault(ir.source_entry, []).append(ir)
+
+                for idx, eid in enumerate(group.entry_ids):
                     if eid < len(reader.entries):
                         e = reader.entries[eid]
                         type_tag = {0x01: "DOC", 0x02: "IMG", 0x03: "AUD", 0x04: "VID"}.get(e.entry_type, "???")
-                        print(f"    [{type_tag}] {e.name} ({_fmt_size(e.original_size)})")
+                        line = f"    [{type_tag}] {e.name} ({_fmt_size(e.original_size)})"
+
+                        # 检查是否有组内关系
+                        if eid in intra_src_map:
+                            for ir in intra_src_map[eid]:
+                                tgt_name = reader.entries[ir.target_entry].name if ir.target_entry < len(reader.entries) else "?"
+                                try:
+                                    rt_name = IntraRelationType(ir.relation_type).name
+                                except ValueError:
+                                    rt_name = f"0x{ir.relation_type:02x}"
+                                line += f"  --[{rt_name}]--> {tgt_name}"
+
+                        print(line)
+
                 meta = group.metadata_dict()
                 if meta:
                     print(f"    元数据: {json.dumps(meta, ensure_ascii=False)}")
@@ -253,14 +316,22 @@ def main():
 
     # pack
     p_pack = subparsers.add_parser("pack", help="打包文件/目录为 .mcpk")
-    p_pack.add_argument("sources", nargs="+", help="源文件或目录")
+    p_pack.add_argument("sources", nargs="*", help="源文件或目录")
     p_pack.add_argument("-o", "--output", required=True, help="输出 .mcpk 文件路径")
     p_pack.add_argument("--prefix", help="包内路径前缀")
     p_pack.add_argument("--group", help="将所有文件归入指定分组")
+    p_pack.add_argument("--auto-group", action="store_true",
+                        help="每个顶级目录自动创建同名分组")
+    p_pack.add_argument("--index", help="JSON 索引文件路径")
+    p_pack.add_argument("--base-dir", dest="base_dir", default=".",
+                        help="索引文件中路径的基准目录 (默认: 当前目录)")
     p_pack.add_argument("--password", "-p", help="加密密码（不指定则不加密）")
     p_pack.add_argument("--encrypt-mode", dest="encrypt_mode", default="full",
                         choices=["full", "metadata_only", "data_only"],
                         help="加密模式 (默认: full)")
+    p_pack.add_argument("--encryption", default="aes",
+                        choices=["aes", "xor"],
+                        help="加密算法 (默认: aes, 需 cryptography 库)")
     p_pack.set_defaults(func=cmd_pack)
 
     # list
@@ -272,7 +343,7 @@ def main():
     p_list.set_defaults(func=cmd_list)
 
     # groups
-    p_groups = subparsers.add_parser("groups", help="列出分组和关系")
+    p_groups = subparsers.add_parser("groups", help="列出分组、标签和关系")
     p_groups.add_argument("file", help=".mcpk 文件路径")
     p_groups.add_argument("--password", "-p", help="解密密码")
     p_groups.set_defaults(func=cmd_groups)
@@ -301,6 +372,11 @@ def main():
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
+        sys.exit(1)
+
+    # pack 命令：非 index 模式下需要 sources
+    if args.command == "pack" and not args.index and not args.sources:
+        p_pack.print_help()
         sys.exit(1)
 
     args.func(args)
