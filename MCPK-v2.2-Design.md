@@ -313,7 +313,7 @@ python -m mcpk pack --index index.json --base-dir ./project/ -o output.mcpk [--p
 | `mcpk/writer.py` | AES-GCM 加密、`import_folder()`、`load_index()`、`add_tag()`、`add_intra_relation()` |
 | `mcpk/reader.py` | AES-GCM 解密、tags/intra_relations 解析、`InvalidTag` 包装 |
 | `mcpk/cli.py` | `--encryption`、`--auto-group`、`--index`/`--base-dir` 参数 |
-| `test_mcpk.py` | 新增 test_21 ~ test_48（28 个测试） |
+| `test_mcpk.py` | 新增 test_21 ~ test_49（30 个测试） |
 
 ---
 
@@ -349,5 +349,6 @@ python -m mcpk pack --index index.json --base-dir ./project/ -o output.mcpk [--p
 | test_46 | 不加密兼容 | 回归测试 |
 | test_47 | JSON 索引空/最小 | 边界情况 |
 | test_48 | JSON 索引复杂场景 | 全特性综合 |
+| test_49 | 同名文件区分 | group + index 参数 |
 
-共计 **48 个测试用例**（原有 20 + 新增 28）。
+共计 **49 个测试用例**（原有 20 + 新增 29）。

@@ -111,14 +111,17 @@ v1.0 的布局是 `Header → Blob0 → Blob1 → ... → BlobN → TOC → Foot
 
 **与 v1 的变化：**
 
-| 字段 | v1 | v2 | 说明 |
-|------|----|----|------|
-| version | 1 | 2 | 版本号升级 |
-| offset 0x10 | toc_offset | magic_index_offset | 语义变更 |
-| offset 0x18 | toc_size | magic_index_size | 语义变更 |
-| offset 0x24 | data_section_size 低4B | group_count | 语义变更 |
-| offset 0x28-0x2F | reserved | group_index_offset + group_index_size | 新增 |
-| offset 0x38-0x3F | reserved | toc_offset | 新增 |
+| 字段 | v1 | v2.0 设计 | v2.2 实际 | 说明 |
+|------|----|----|----|------|
+| version | 1 | 2 | 2 | 版本号升级 |
+| offset 0x08 | created_at | created_at | packed_at | 改为容器级打包时间 |
+| offset 0x10 | toc_offset | magic_index_offset | ep_offset | 实际存储 Encryption Params 偏移 |
+| offset 0x18 | toc_size | magic_index_size | ep_size | 实际存储 Encryption Params 大小 |
+| offset 0x24 | data_section_size 低4B | group_count | group_count | 语义变更 |
+| offset 0x28-0x2F | reserved | group_index_offset + size | group_index_offset + size | 新增 |
+| offset 0x38-0x3F | reserved | toc_offset | toc_offset | 新增 |
+
+> **注意：** v2.2 实际实现中，offset 0x10/0x18 存储的是 Encryption Params 区的位置（加密文件）或 0（非加密文件）。Magic Index 紧接 Header + EP 之后，偏移 = 64 + ep_size。
 
 > **兼容性说明：** v2 的 Header 布局与 v1 不兼容。读取工具通过 version 字段区分版本。
 
@@ -385,6 +388,11 @@ reserved[1] = 保留
 ---
 
 ## 5. 加密架构（v2 预备设计）
+
+> **注意：** 本节为 v2.0 阶段的预备设计。实际加密实现见 [MCPK-v2.1-Design.md](MCPK-v2.1-Design.md)（XOR）和 [MCPK-v2.2-Design.md](MCPK-v2.2-Design.md)（AES-GCM）。主要差异：
+> - 实际使用 Encryption Params 区（56/76 字节）而非 Header flags
+> - 实际密钥派生：XOR 用 SHA-256 混合，AES 用 PBKDF2 + HKDF
+> - 实际加密模式：FULL / METADATA_ONLY / DATA_ONLY（无 PER_GROUP/PER_ENTRY）
 
 v2 的布局天然适合分层加密：
 

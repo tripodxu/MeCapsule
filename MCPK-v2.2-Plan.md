@@ -1,5 +1,7 @@
 # MCPK v2.2 实施计划
 
+**状态：已完成** — 所有 Phase 均已实现，49 个测试全部通过。本文档保留作为实施记录。
+
 **基于用户确认：AES-GCM 用 cryptography 库 / 缺失文件跳过警告 / 组内关系新增专用类型**
 
 ---
@@ -26,13 +28,13 @@ class KdfType(IntEnum):
 
 # EncryptionMode 不变（NONE/FULL/METADATA_ONLY/DATA_ONLY 四种）
 
-# Encryption Params 区从 56B 扩展为 80B：
+# Encryption Params 区从 56B 扩展为 76B：
 #   params_magic(4s) + kdf_type(B) + encrypt_mode(B) + reserved(2s)
 #   + kdf_iterations(I)        ← 新增 4B
 #   + salt(32s)                ← 从 16B 扩展到 32B
 #   + key_verify(32s)          ← 从 control_key_hash 改名，仍 32B
 ENCRYPTION_PARAMS_FMT_V2 = "<4sBB 2s I 32s 32s"
-ENCRYPTION_PARAMS_SIZE_V2 = 80
+ENCRYPTION_PARAMS_SIZE_V2 = 76  # struct.calcsize = 4+1+1+2+4+32+32 = 76
 ```
 
 Header 布局不变，`ep_size` 字段自动记录 56 或 80。
@@ -346,16 +348,20 @@ python -m mcpk pack --index index.json --base-dir ./project/ -o output.mcpk [--p
 |---------|------|------|
 | test_21 | AES-GCM FULL 加密 roundtrip | Phase 1 |
 | test_22 | AES-GCM METADATA_ONLY | Phase 1 |
-| test_23 | AES-GCM 密码错误/篡改检测 | Phase 1 |
-| test_24 | XOR 向后兼容（kdf_type=0x01） | Phase 1 |
-| test_25 | 分组多 Tag 标签 | Phase 2 |
-| test_26 | 组内关系 (IntraRelation) | Phase 2 |
-| test_27 | Tag + 组内关系 + 加密组合 | Phase 1+2 |
-| test_28 | import_folder 基本功能 | Phase 3 |
-| test_29 | import_folder + 多文件夹 | Phase 3 |
-| test_30 | JSON 索引打包（正常） | Phase 4 |
-| test_31 | JSON 索引打包（缺失文件跳过） | Phase 4 |
-| test_32 | JSON 索引 + 加密组合 | Phase 1+4 |
+| test_23 | AES-GCM DATA_ONLY | Phase 1 |
+| test_24 | AES-GCM 错误密码 | Phase 1 |
+| test_25 | AES-GCM 篡改检测 | Phase 1 |
+| test_26 | XOR 向后兼容 | Phase 1 |
+| test_27 | AES-GCM + 分组 + 关系 | Phase 1+2 |
+| test_28 | 分组 Tag 基本 | Phase 2 |
+| test_29 | 动态添加 Tag | Phase 2 |
+| test_30 | 组内关系基本 | Phase 2 |
+| test_31 | 多组内关系 | Phase 2 |
+| test_32 | Tags + 组内关系 + 加密 | Phase 1+2 |
+| test_33~35 | import_folder 变体 | Phase 3 |
+| test_36~39 | JSON 索引打包变体 | Phase 4 |
+| test_40~48 | inspect/tag/枚举/兼容性 | 综合 |
+| test_49 | 同名文件区分 | group + index |
 
 ---
 

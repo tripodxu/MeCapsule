@@ -336,13 +336,13 @@ Footer 的存在允许读取工具从文件末尾反向定位 TOC，无需先读
 
 ## 12. 版本演进
 
-v1.0 当前定义。未来版本计划：
+| 版本 | 状态 | 特性 |
+|------|------|------|
+| v1.0 | 已完成 | 基础格式：Header / TOC / Footer / 文档 / 图片 / 音频 / zlib / CRC32 |
+| v2.0 | 已完成 | Magic Index + 分组存储 + Group Index + VIDEO 类型（见 [MCPK-v2-Design.md](MCPK-v2-Design.md)） |
+| v2.1 | 已完成 | 时间戳 + XOR 流加密（见 [MCPK-v2.1-Design.md](MCPK-v2.1-Design.md)） |
+| v2.2 | 已完成 | AES-256-GCM + 标签 + 组内关系 + 索引打包（见 [MCPK-v2.2-Design.md](MCPK-v2.2-Design.md)） |
 
-| 版本 | 计划特性 |
-|------|----------|
-| v1.1 | 全局加密（AES-256-GCM） |
-| v1.2 | 数字签名（Ed25519） |
-| v1.3 | 增量更新模式（append-only） |
-| v2.0 | 流式索引、远程资源引用 |
+未来计划见 [ROADMAP.md](ROADMAP.md)。
 
 版本兼容规则：读取工具必须拒绝 `version > 工具支持版本` 的文件。
